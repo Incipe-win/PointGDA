@@ -8,3 +8,5 @@ backbone: 'ViT-B/16'
 
 subsample_classes: 'base'
 augment_epoch: 10
+
+num_views: 10
