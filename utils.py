@@ -31,7 +31,8 @@ class Textual_Encoder(nn.Module):
             "{}_{}_test_prompts".format(self.cfg["dataset"].lower(), self.cfg["backbone_name"])
         ]
         prompts = torch.cat([clip.tokenize(p) for p in prompts]).cuda()
-        text_feat = self.clip_model.encode_text(prompts).repeat(1, self.cfg["num_views"])
+        # text_feat = self.clip_model.encode_text(prompts).repeat(1, self.cfg["num_views"])
+        text_feat = self.clip_model.encode_text(prompts)
         return text_feat
 
 
@@ -96,8 +97,8 @@ def pre_load_features(cfg, split, clip_model, loader, preprocess, norm=True):
             pc, target = pc.cuda(), target.cuda()
             images = real_proj(pc).type(clip_model.dtype)
 
-            images_visual = images.view(-1, cfg["num_views"], 3, 224, 224)
-            save_projection_images(images_visual, i)
+            # images_visual = images.view(-1, cfg["num_views"], 3, 224, 224)
+            # save_projection_images(images_visual, i)
 
             # ViT/B: channel 512
             image_features = clip_model.encode_image(images)

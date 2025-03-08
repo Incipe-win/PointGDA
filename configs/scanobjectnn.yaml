@@ -1,12 +1,13 @@
 # ------ root_path/dataset_name ------
-root_path: 'data'
+root_path: "data"
 
 # ------ Basic Config ------
-dataset: 'scanobjectnn'
+dataset: "scanobjectnn"
 shots: 16
-backbone: 'ViT-B/16'
+backbone: "ViT-B/16"
+backbone_name: "vit_b16"
 
-subsample_classes: 'base'
+subsample_classes: "base"
 augment_epoch: 10
 
 num_views: 10
