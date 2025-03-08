@@ -31,8 +31,7 @@ class Textual_Encoder(nn.Module):
             "{}_{}_test_prompts".format(self.cfg["dataset"].lower(), self.cfg["backbone_name"])
         ]
         prompts = torch.cat([clip.tokenize(p) for p in prompts]).cuda()
-        # text_feat = self.clip_model.encode_text(prompts).repeat(1, self.cfg["num_views"])
-        text_feat = self.clip_model.encode_text(prompts)
+        text_feat = self.clip_model.encode_text(prompts).repeat(1, self.cfg["num_views"])
         return text_feat
 
 

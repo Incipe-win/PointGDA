@@ -40,13 +40,6 @@ def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_l
         best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
     ).cuda()
 
-    train_transform = v2.Compose(
-        [
-            v2.RandomResizedCrop(size=224, scale=(0.5, 1), interpolation=v2.InterpolationMode.BICUBIC),
-            v2.RandomHorizontalFlip(p=0.5),
-            v2.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711)),
-        ]
-    )
     # Parameter Estimation.
     with torch.no_grad():
         # Ours
@@ -56,16 +49,12 @@ def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_l
             for pc, target in tqdm(train_loader_cache):
                 pc, target = pc.cuda(), target.cuda()
                 images = real_proj(pc).type(clip_model.dtype)
-                images = images.view(-1, cfg["num_views"], 3, 224, 224)  # (b, 10, 3, 224, 224)
-                for j in range(cfg["num_views"]):
-                    image_features = images[:, j]
-                    image_features = train_transform(image_features)
-                    image_features = clip_model.encode_image(image_features)
-                    image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-                    # image_features = image_features.reshape(-1, cfg["num_views"], 512) * view_weights.reshape(1, -1, 1)
-                    # image_features = image_features.reshape(-1, cfg["num_views"] * 512).type(clip_model.dtype)
-                    vecs.append(image_features)
-                    labels.append(target)
+                image_features = clip_model.encode_image(images)
+                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                image_features = image_features.reshape(-1, cfg["num_views"], 512) * view_weights.reshape(1, -1, 1)
+                image_features = image_features.reshape(-1, cfg["num_views"] * 512).type(clip_model.dtype)
+                vecs.append(image_features)
+                labels.append(target)
         vecs = torch.cat(vecs)
         labels = torch.cat(labels)
 
@@ -83,25 +72,16 @@ def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_l
         W = torch.einsum("nd, dc -> cn", mus, cov_inv)
         b = ps.log() - torch.einsum("nd, dc, nc -> n", mus, cov_inv, mus) / 2
 
-        print(
-            f"val_features shape is {val_features.shape}, clip_weights shape is {clip_weights.shape}, W shape is {W.shape}, test_features shape is {test_features.shape}"
-        )
+        # print(
+        #     f"val_features shape is {val_features.shape}, clip_weights shape is {clip_weights.shape}, W shape is {W.shape}, test_features shape is {test_features.shape}"
+        # )
+
         # Evaluate
         # Grid search for hyper-parameter alpha
         best_val_acc = 0
         best_alpha = 0.1
         for alpha in [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
-            val_features = val_features.view(-1, 10, 512).float()
-            fs_logits = torch.einsum("b a d, d c -> b a c", val_features, W)
-            # fs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
-            fs_logits = (fs_logits * view_weights.view(1, -1, 1)).sum(dim=1)
-
-            zs_logits = torch.einsum("b a d, d c -> b a c", val_features, clip_weights.float())
-            # zs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
-            zs_logits = (zs_logits * view_weights.view(1, -1, 1)).sum(dim=1)
-
-            # val_logits = 100.0 * val_features.float() @ clip_weights.float() + alpha * (val_features.float() @ W + b)
-            val_logits = 100.0 * zs_logits + alpha * (fs_logits + b)
+            val_logits = 100.0 * val_features.float() @ clip_weights.float() + alpha * (val_features.float() @ W + b)
 
             acc = cls_acc(val_logits, val_labels)
             if acc > best_val_acc:
@@ -110,18 +90,7 @@ def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_l
 
         print("best_val_alpha: %s \t best_val_acc: %s" % (best_alpha, best_val_acc))
         alpha = best_alpha
-
-        test_features = test_features.view(-1, 10, 512).float()
-        fs_logits = torch.einsum("b a d, d c -> b a c", test_features, W)
-        # fs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
-        fs_logits = (fs_logits * view_weights.view(1, -1, 1)).sum(dim=1)
-
-        zs_logits = torch.einsum("b a d, d c -> b a c", test_features, clip_weights.float())
-        # zs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
-        zs_logits = (zs_logits * view_weights.view(1, -1, 1)).sum(dim=1)
-
-        # test_logits = 100.0 * test_features.float() @ clip_weights.float() + alpha * (test_features.float() @ W + b)
-        test_logits = 100.0 * zs_logits + alpha * (fs_logits + b)
+        test_logits = 100.0 * test_features.float() @ clip_weights.float() + alpha * (test_features.float() @ W + b)
         notune_acc = cls_acc(test_logits, test_labels)
         print("Nonetune acc:", notune_acc)
     return notune_acc
