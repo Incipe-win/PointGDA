@@ -88,9 +88,9 @@ def save_projection_images(images, batch_idx, base_dir="projected_images"):
 
 def pre_load_features(cfg, split, clip_model, loader, preprocess, norm=True):
     features, labels = [], []
-    # view_weights = torch.Tensor(
-    #     best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
-    # ).cuda()
+    view_weights = torch.Tensor(
+        best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
+    ).cuda()
 
     with torch.no_grad():
         for i, (pc, target) in enumerate(tqdm(loader)):
@@ -104,7 +104,7 @@ def pre_load_features(cfg, split, clip_model, loader, preprocess, norm=True):
             image_features = clip_model.encode_image(images)
             if norm:
                 image_features /= image_features.norm(dim=-1, keepdim=True)
-            # image_features = image_features.reshape(-1, cfg["num_views"], 512) * view_weights.reshape(1, -1, 1)
+            image_features = image_features.reshape(-1, cfg["num_views"], 512) * view_weights.reshape(1, -1, 1)
             image_features = image_features.reshape(-1, cfg["num_views"] * 512).type(clip_model.dtype)
             features.append(image_features)
             labels.append(target)

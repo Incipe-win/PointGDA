@@ -36,9 +36,9 @@ def get_arguments():
 
 
 def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_labels, val_features, val_labels):
-    # view_weights = torch.Tensor(
-    #     best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
-    # ).cuda()
+    view_weights = torch.Tensor(
+        best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
+    ).cuda()
 
     train_transform = v2.Compose(
         [
@@ -93,15 +93,15 @@ def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_l
         for alpha in [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
             val_features = val_features.view(-1, 10, 512).float()
             fs_logits = torch.einsum("b a d, d c -> b a c", val_features, W)
-            fs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
-            fs_logits = (fs_logits * fs_weights.view(1, 10, 1)).sum(dim=1)
+            # fs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
+            fs_logits = (fs_logits * view_weights.view(1, -1, 1)).sum(dim=1)
 
             zs_logits = torch.einsum("b a d, d c -> b a c", val_features, clip_weights.float())
-            zs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
-            zs_logits = (zs_logits * zs_weights.view(1, 10, 1)).sum(dim=1)
+            # zs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
+            zs_logits = (zs_logits * view_weights.view(1, -1, 1)).sum(dim=1)
 
             # val_logits = 100.0 * val_features.float() @ clip_weights.float() + alpha * (val_features.float() @ W + b)
-            val_logits = 100.0 * zs_logits + alpha * fs_logits
+            val_logits = 100.0 * zs_logits + alpha * (fs_logits + b)
 
             acc = cls_acc(val_logits, val_labels)
             if acc > best_val_acc:
@@ -113,15 +113,15 @@ def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_l
 
         test_features = test_features.view(-1, 10, 512).float()
         fs_logits = torch.einsum("b a d, d c -> b a c", test_features, W)
-        fs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
-        fs_logits = (fs_logits * fs_weights.view(1, 10, 1)).sum(dim=1)
+        # fs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
+        fs_logits = (fs_logits * view_weights.view(1, -1, 1)).sum(dim=1)
 
         zs_logits = torch.einsum("b a d, d c -> b a c", test_features, clip_weights.float())
-        zs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
-        zs_logits = (zs_logits * zs_weights.view(1, 10, 1)).sum(dim=1)
+        # zs_weights = torch.softmax(torch.randn(10), dim=0).cuda()
+        zs_logits = (zs_logits * view_weights.view(1, -1, 1)).sum(dim=1)
 
         # test_logits = 100.0 * test_features.float() @ clip_weights.float() + alpha * (test_features.float() @ W + b)
-        test_logits = 100.0 * zs_logits + alpha * fs_logits
+        test_logits = 100.0 * zs_logits + alpha * (fs_logits + b)
         notune_acc = cls_acc(test_logits, test_labels)
         print("Nonetune acc:", notune_acc)
     return notune_acc
