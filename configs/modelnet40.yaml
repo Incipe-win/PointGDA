@@ -5,8 +5,9 @@ root_path: 'data'
 dataset: 'modelnet40'
 shots: 16
 backbone: 'ViT-B/16'
+backbone_name: 'vit_b16'
 
 subsample_classes: 'base'
-augment_epoch: 10
+augment_epoch: 1
 
 num_views: 10

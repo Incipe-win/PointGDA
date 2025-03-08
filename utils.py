@@ -7,6 +7,7 @@ import torch.nn as nn
 import clip
 from proj import Realistic_Projection
 import torchvision.transforms as transforms
+from best_param import best_prompt_weight
 
 
 def cls_acc(output, target, topk=1):
@@ -17,24 +18,28 @@ def cls_acc(output, target, topk=1):
     return acc
 
 
+class Textual_Encoder(nn.Module):
+    def __init__(self, cfg, classnames, clip_model):
+        super().__init__()
+        self.cfg = cfg
+        self.classnames = classnames
+        self.clip_model = clip_model
+        self.dtype = clip_model.dtype
+
+    def forward(self):
+        prompts = best_prompt_weight[
+            "{}_{}_test_prompts".format(self.cfg["dataset"].lower(), self.cfg["backbone_name"])
+        ]
+        prompts = torch.cat([clip.tokenize(p) for p in prompts]).cuda()
+        text_feat = self.clip_model.encode_text(prompts).repeat(1, self.cfg["num_views"])
+        return text_feat
+
+
 def clip_classifier(cfg, classnames, template, clip_model):
-    with torch.no_grad():
-        clip_weights = []
-
-        for classname in classnames:
-            # Tokenize the prompts
-            classname = classname.replace("_", " ")
-            texts = [t.format(classname) for t in template]
-            texts = clip.tokenize(texts).cuda()
-            # prompt ensemble for ImageNet
-            class_embeddings = clip_model.encode_text(texts).repeat(1, cfg["num_views"])
-            class_embeddings /= class_embeddings.norm(dim=-1, keepdim=True)
-            class_embedding = class_embeddings.mean(dim=0)
-            class_embedding /= class_embedding.norm()
-            clip_weights.append(class_embedding)
-
-        clip_weights = torch.stack(clip_weights, dim=1).cuda()
-    return clip_weights
+    textual_encoder = Textual_Encoder(cfg, classnames, clip_model)
+    text_feat = textual_encoder()
+    text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True)
+    return text_feat.t()
 
 
 def real_proj(pc, imsize=224):
@@ -44,18 +49,62 @@ def real_proj(pc, imsize=224):
     return img
 
 
+def save_projection_images(images, batch_idx, base_dir="projected_images"):
+    import os
+    from PIL import Image
+
+    batch_size, num_views = images.shape[:2]
+    batch_dir = os.path.join(base_dir, f"batch_{batch_idx}")
+    os.makedirs(batch_dir, exist_ok=True)
+
+    for point_idx in range(batch_size):
+        # 创建点云专属目录
+        pc_dir = os.path.join(batch_dir, f"point_{point_idx}")
+        os.makedirs(pc_dir, exist_ok=True)
+
+        # 生成2x5缩略图拼贴
+        collage = Image.new("RGB", (224 * 5, 224 * 2))  # 创建空白画布
+
+        for view_idx in range(num_views):
+            # 提取单张图像张量
+            img_tensor = images[point_idx, view_idx]
+
+            # 转换张量为PIL图像[4](@ref)
+            img_pil = transforms.ToPILImage()(img_tensor)
+
+            # 保存原始视图
+            img_pil.save(os.path.join(pc_dir, f"view_{view_idx}.jpg"))
+
+            # 生成缩略图并拼贴
+            thumb = img_pil.resize((224, 224))  # 保持原尺寸或调整为112x112
+            x = (view_idx % 5) * 224  # 列坐标
+            y = (view_idx // 5) * 224  # 行坐标
+            collage.paste(thumb, (x, y))
+
+        # 保存拼贴图
+        collage.save(os.path.join(pc_dir, "collage.jpg"))
+
+
 def pre_load_features(cfg, split, clip_model, loader, preprocess, norm=True):
     features, labels = [], []
+    # view_weights = torch.Tensor(
+    #     best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
+    # ).cuda()
 
     with torch.no_grad():
         for i, (pc, target) in enumerate(tqdm(loader)):
             pc, target = pc.cuda(), target.cuda()
             images = real_proj(pc).type(clip_model.dtype)
+
+            images_visual = images.view(-1, cfg["num_views"], 3, 224, 224)
+            save_projection_images(images_visual, i)
+
             # ViT/B: channel 512
             image_features = clip_model.encode_image(images)
             if norm:
                 image_features /= image_features.norm(dim=-1, keepdim=True)
-            image_features = image_features.reshape(-1, cfg["num_views"] * 512)
+            # image_features = image_features.reshape(-1, cfg["num_views"], 512) * view_weights.reshape(1, -1, 1)
+            image_features = image_features.reshape(-1, cfg["num_views"] * 512).type(clip_model.dtype)
             features.append(image_features)
             labels.append(target)
 

@@ -28,25 +28,6 @@ def real_proj(pc, imsize=224):
     return img
 
 
-class RealProjTransform:
-    def __init__(self, imsize=224):
-        self.imsize = imsize
-
-    def __call__(self, pc):
-        return real_proj(pc, self.imsize)
-
-
-train_tranform = transforms.Compose(
-    [
-        RealProjTransform(imsize=224),
-        transforms.RandomResizedCrop(size=224, scale=(0.5, 1), interpolation=transforms.InterpolationMode.BICUBIC),
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711)),
-    ]
-)
-
-
 def get_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", dest="config", help="settings of Tip-Adapter in yaml format")
@@ -55,7 +36,9 @@ def get_arguments():
 
 
 def run(cfg, train_loader_cache, clip_weights, clip_model):
-
+    # view_weights = torch.Tensor(
+    #     best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
+    # ).cuda()
     # Parameter Estimation.
     with torch.no_grad():
         # Ours
@@ -67,7 +50,8 @@ def run(cfg, train_loader_cache, clip_weights, clip_model):
                 images = real_proj(pc).type(clip_model.dtype)
                 image_features = clip_model.encode_image(images)
                 image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-                image_features = image_features.reshape(-1, cfg["num_views"] * 512)
+                # image_features = image_features.reshape(-1, cfg["num_views"], 512) * view_weights.reshape(1, -1, 1)
+                image_features = image_features.reshape(-1, cfg["num_views"] * 512).type(clip_model.dtype)
                 vecs.append(image_features)
                 labels.append(target)
         vecs = torch.cat(vecs)
@@ -129,12 +113,15 @@ def main():
 
     notune_accs = {"1": [], "2": [], "3": []}
 
-    for seed in [1, 2, 3]:
+    seed_list = [1]
+    shots_list = [16]
+
+    for seed in seed_list:
         cfg["seed"] = seed
         random.seed(seed)
         torch.manual_seed(seed)
 
-        for shots in [1, 2, 4, 8, 16]:
+        for shots in shots_list:
             cfg["shots"] = shots
 
             print("Preparing dataset.")
