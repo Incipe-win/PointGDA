@@ -36,9 +36,9 @@ def get_arguments():
 
 
 def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_labels, val_features, val_labels):
-    view_weights = torch.Tensor(
-        best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
-    ).cuda()
+    # view_weights = torch.Tensor(
+    #     best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
+    # ).cuda()
 
     # Parameter Estimation.
     with torch.no_grad():
@@ -51,7 +51,7 @@ def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_l
                 images = real_proj(pc).type(clip_model.dtype)
                 image_features = clip_model.encode_image(images)
                 image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-                image_features = image_features.reshape(-1, cfg["num_views"], 512) * view_weights.reshape(1, -1, 1)
+                # image_features = image_features.reshape(-1, cfg["num_views"], 512) * view_weights.reshape(1, -1, 1)
                 image_features = image_features.reshape(-1, cfg["num_views"] * 512).type(clip_model.dtype)
                 vecs.append(image_features)
                 labels.append(target)
@@ -142,7 +142,14 @@ def main():
             clip_weights = clip_classifier(cfg, dataset.classnames, dataset.template, clip_model.float())
 
             notune_acc = run(
-                cfg, train_loader_cache, clip_weights, clip_model, test_features, test_labels, val_features, val_labels
+                cfg,
+                train_loader_cache,
+                clip_weights,
+                clip_model,
+                test_features,
+                test_labels,
+                val_features,
+                val_labels,
             )
             notune_accs[str(cfg["seed"])].append(notune_acc)
     print("Evaluate on dataset:", cfg["dataset"])
