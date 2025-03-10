@@ -49,18 +49,24 @@ def real_proj(pc, imsize=224):
     return img
 
 
-def save_projection_images(images, batch_idx, base_dir="projected_images"):
+def save_projection_images(pc, images, batch_idx, base_dir="projected_images"):
     import os
     from PIL import Image
+    import open3d as o3d
 
     batch_size, num_views = images.shape[:2]
     batch_dir = os.path.join(base_dir, f"batch_{batch_idx}")
     os.makedirs(batch_dir, exist_ok=True)
+    pcd = o3d.geometry.PointCloud()
 
     for point_idx in range(batch_size):
+
         # 创建点云专属目录
         pc_dir = os.path.join(batch_dir, f"point_{point_idx}")
         os.makedirs(pc_dir, exist_ok=True)
+
+        pcd.points = o3d.utility.Vector3dVector(pc[point_idx].detach().cpu().numpy())
+        o3d.io.write_point_cloud(os.path.join(pc_dir, "output.ply"), pcd)
 
         # 生成2x5缩略图拼贴
         collage = Image.new("RGB", (224 * 5, 224 * 2))  # 创建空白画布
@@ -97,7 +103,7 @@ def pre_load_features(cfg, split, clip_model, loader, preprocess, norm=True):
             images = real_proj(pc).type(clip_model.dtype)
 
             # images_visual = images.view(-1, cfg["num_views"], 3, 224, 224)
-            # save_projection_images(images_visual, i)
+            # save_projection_images(pc, images_visual, i)
 
             # ViT/B: channel 512
             image_features = clip_model.encode_image(images)
