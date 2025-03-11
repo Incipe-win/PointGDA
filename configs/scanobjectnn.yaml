@@ -4,7 +4,7 @@ root_path: "data"
 # ------ Basic Config ------
 dataset: "scanobjectnn"
 shots: 16
-backbone: "ViT-B/16"
+backbone: "ULIP_VITB16"
 backbone_name: "vit_b16"
 
 subsample_classes: "base"

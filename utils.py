@@ -201,3 +201,93 @@ def search_hp(cfg, cache_keys, cache_values, features, labels, clip_weights, ada
         print("\nAfter searching, the best accuarcy: {:.2f}.\n".format(best_acc))
 
     return best_beta, best_alpha
+
+
+def load_text_feature(cfg):
+    save_path = cfg["cache_dir"] + "/text_weights_gpt_t.pt"
+    clip_weights = torch.load(save_path, weights_only=False)
+    return clip_weights
+
+
+def load_few_shot_feature(cfg, norm=True):
+    if norm:
+        cache_keys = torch.load(cfg["cache_dir"] + "/keys_" + str(cfg["shots"]) + "shots.pt", weights_only=False)
+        cache_values = torch.load(cfg["cache_dir"] + "/values_" + str(cfg["shots"]) + "shots.pt", weights_only=False)
+    else:
+        cache_keys = torch.load(
+            cfg["cache_dir"] + "/keys_" + str(cfg["shots"]) + "shots_unnormed.pt", weights_only=False
+        )
+        cache_values = torch.load(
+            cfg["cache_dir"] + "/values_" + str(cfg["shots"]) + "shots_unnormed.pt", weights_only=False
+        )
+    return cache_keys, cache_values
+
+
+def loda_val_test_feature(cfg, split, norm=True):
+    if norm:
+        features = torch.load(cfg["cache_dir"] + "/" + split + "_f.pt", weights_only=False)
+        labels = torch.load(cfg["cache_dir"] + "/" + split + "_l.pt", weights_only=False)
+    else:
+        features = torch.load(cfg["cache_dir"] + "/" + split + "_f_unnormed.pt", weights_only=False)
+        labels = torch.load(cfg["cache_dir"] + "/" + split + "_l_unnormed.pt", weights_only=False)
+    return features, labels
+
+
+# t_features [c,p,d]
+# s_features [c,n,d] or [c,d]
+def image_guide_text(cfg, t_features, s_features, gamma=-1, return_weights=False, return_matching=False):
+    t_features = t_features / t_features.norm(dim=-1, keepdim=True)
+
+    if gamma == -1:
+        if cfg["dataset"] == "imagenet":
+            gamma = 1
+        elif cfg["dataset"] == "oxford_flowers":
+            gamma = 100
+        else:
+            gamma = 50
+
+    cate_num, prompt_num, feat_dim = t_features.shape  # c, p, d
+    if len(s_features.shape) == 3:
+        s_features = s_features.mean(dim=1)  # c,d
+        s_features = s_features / s_features.norm(dim=-1, keepdim=True)
+    weights = torch.ones(cate_num, prompt_num).to(t_features.dtype).to(t_features.device)  # c, p
+    s_features = s_features.to(t_features.dtype)
+    t_features = t_features / t_features.norm(dim=-1, keepdim=True)
+
+    matching_score = []
+    for c in range(cate_num):
+        # weights[c:c+1] # 1, p
+        # t_features[c] # p, d
+        # s_features[c:c+1] # 1, d
+        weights[c] = (s_features[c : c + 1] @ t_features[c].t()).squeeze(dim=0)
+        matching_score.append(weights[c].clone())
+        weights[c] = weights[c] / weights[c].norm()
+        weights[c] = F.softmax(weights[c] * gamma, dim=0)
+    matching_score = torch.stack(matching_score, dim=0)  # N, P
+
+    for weights in [weights]:
+        normed_weights = weights
+        normed_clip_weights = torch.einsum("cp, cpd-> cd", normed_weights, t_features)
+        normed_clip_weights = normed_clip_weights / normed_clip_weights.norm(dim=-1, keepdim=True)
+
+    if return_matching:
+        return normed_clip_weights, matching_score
+    elif return_weights:
+        return normed_clip_weights, normed_weights
+    else:
+        return normed_clip_weights
+
+
+def vec_sort(vecs_t, matching_score):
+    cate_num, prompt_num, dim = vecs_t.shape  # N,P,D
+
+    weights, sorted_idx = torch.topk(matching_score, k=prompt_num, dim=-1)
+    sort_vecs_t = []
+    for c in range(cate_num):
+        sort_vecs_t.append(vecs_t[c][sorted_idx[c]].clone())
+    sort_vecs_t = torch.stack(sort_vecs_t, dim=0)
+
+    if len(sort_vecs_t.shape) == 2:
+        sort_vecs_t = sort_vecs_t.unsqueeze(1)
+
+    return sort_vecs_t, weights

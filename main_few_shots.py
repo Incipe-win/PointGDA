@@ -21,6 +21,7 @@ from sklearn.covariance import LedoitWolf, OAS, GraphicalLassoCV, GraphicalLasso
 from torchvision.transforms import v2
 from models import ULIP_models
 from collections import OrderedDict
+from PointGDA import PointGDA
 
 
 def real_proj(pc, imsize=224):
@@ -37,62 +38,11 @@ def get_arguments():
     parser.add_argument("--test_ckpt_addr", default="", help="the ckpt to test 3d zero shot")
     parser.add_argument("--evaluate_3d", action="store_true", help="eval ulip only")
     parser.add_argument("--npoints", default=2048, type=int, help="number of points used for pre-train and test.")
+    parser.add_argument("--shot", dest="shot", type=int, default=1, help="shots number")
+    parser.add_argument("--seed", dest="seed", type=int, default=1, help="seed")
+    parser.add_argument("--dbg", dest="dbg", type=float, default=0, help="debug mode")
     args = parser.parse_args()
     return args
-
-
-def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_labels, val_features, val_labels):
-    # Parameter Estimation.
-    with torch.no_grad():
-        # Ours
-        vecs = []
-        labels = []
-        for i in range(cfg["augment_epoch"]):
-            for pc, target in tqdm(train_loader_cache):
-                pc, target = pc.cuda(), target.cuda()
-                pc = clip_model.encode_pc(pc)
-                pc = pc / pc.norm(dim=-1, keepdim=True)
-                vecs.append(pc)
-                labels.append(target)
-        vecs = torch.cat(vecs)
-        labels = torch.cat(labels)
-
-        # normal distribution
-        mus = torch.cat([vecs[labels == i].mean(dim=0, keepdim=True) for i in range(clip_weights.shape[1])])
-
-        # KS Estimator.
-        center_vecs = torch.cat([vecs[labels == i] - mus[i].unsqueeze(0) for i in range(clip_weights.shape[1])])
-        cov_inv = center_vecs.shape[1] * torch.linalg.pinv(
-            (center_vecs.shape[0] - 1) * center_vecs.T.cov()
-            + center_vecs.T.cov().trace() * torch.eye(center_vecs.shape[1]).cuda()
-        )
-
-        ps = torch.ones(clip_weights.shape[1]).cuda() * 1.0 / clip_weights.shape[1]
-        W = torch.einsum("nd, dc -> cn", mus, cov_inv)
-        b = ps.log() - torch.einsum("nd, dc, nc -> n", mus, cov_inv, mus) / 2
-
-        print(
-            f"val_features shape is {val_features.shape}, clip_weights shape is {clip_weights.shape}, W shape is {W.shape}, test_features shape is {test_features.shape}"
-        )
-
-        # Evaluate
-        # Grid search for hyper-parameter alpha
-        best_val_acc = 0
-        best_alpha = 0.1
-        for alpha in [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0]:
-            val_logits = 100.0 * val_features.float() @ clip_weights.float() + alpha * (val_features.float() @ W + b)
-
-            acc = cls_acc(val_logits, val_labels)
-            if acc > best_val_acc:
-                best_val_acc = acc
-                best_alpha = alpha
-
-        print("best_val_alpha: %s \t best_val_acc: %s" % (best_alpha, best_val_acc))
-        alpha = best_alpha
-        test_logits = 100.0 * test_features.float() @ clip_weights.float() + alpha * (test_features.float() @ W + b)
-        notune_acc = cls_acc(test_logits, test_labels)
-        print("Nonetune acc:", notune_acc)
-    return notune_acc
 
 
 def main():
@@ -101,10 +51,19 @@ def main():
     assert os.path.exists(args.config)
 
     cfg = yaml.load(open(args.config, "r"), Loader=yaml.Loader)
+    cfg["shots"] = args.shot
+    cfg["seed"] = args.seed
+    cfg["dbg"] = args.dbg
+    print("shots", cfg["shots"])
+    print("seed", cfg["seed"])
+    print("dbg", cfg["dbg"])
 
-    # Load cfg for conditional prompt.
-    print("\nRunning configs.")
-    print(cfg, "\n")
+    if not os.path.exists("outputs"):
+        os.makedirs("outputs")
+    cache_dir = os.path.join(f'./caches/{cfg["backbone"]}/{cfg["seed"]}/{cfg["dataset"]}')
+    os.makedirs(cache_dir, exist_ok=True)
+    cfg["cache_dir"] = cache_dir
+    print(cfg)
 
     ckpt = torch.load(args.test_ckpt_addr, weights_only=False)
     state_dict = OrderedDict()
@@ -118,55 +77,51 @@ def main():
     for p in model.parameters():
         p.requires_grad = False
 
-    notune_accs = {"1": [], "2": [], "3": []}
+    # Prepare dataset
+    random.seed(cfg["seed"])
+    torch.manual_seed(cfg["seed"])
 
-    seed_list = [1, 2, 3]
-    shots_list = [1, 2, 4, 8, 16]
+    # Textual features
+    print("\nGetting textual features as CLIP's classifier.")
+    clip_weights_cupl_all = torch.load(cfg["cache_dir"] + "/text_weights_cupl_t_all.pt", weights_only=False)
+    cate_num, prompt_cupl_num, dim = clip_weights_cupl_all.shape
+    print(f"cate_num is {cate_num}, prompt_cupl_num is {prompt_cupl_num}, dim is {dim}")
+    clip_weights_cupl = clip_weights_cupl_all.mean(dim=1).t()
+    clip_weights_cupl = clip_weights_cupl / clip_weights_cupl.norm(dim=0, keepdim=True)
 
-    for seed in seed_list:
-        cfg["seed"] = seed
-        random.seed(seed)
-        torch.manual_seed(seed)
+    # Construct the cache model by few-shot training set
+    print("\nConstructing cache model by few-shot visual features and labels.")
+    cache_keys, cache_values = load_few_shot_feature(cfg)
 
-        for shots in shots_list:
-            cfg["shots"] = shots
+    # Pre-load val features
+    print("\nLoading visual features and labels from val set.")
+    val_features, val_labels = loda_val_test_feature(cfg, "val")
 
-            print("Preparing dataset.")
-            dataset = build_dataset(cfg["dataset"], cfg["root_path"], cfg["shots"])
+    # Pre-load test features
+    print("\nLoading visual features and labels from test set.")
+    test_features, test_labels = loda_val_test_feature(cfg, "test")
 
-            train_loader_cache = build_data_loader(
-                data_source=dataset.train_x, batch_size=64, is_train=True, shuffle=True
-            )
+    # ------------------------------------------ Fusion ------------------------------------------
+    image_weights_all = torch.stack([cache_keys.t()[torch.argmax(cache_values, dim=1) == i] for i in range(cate_num)])
+    image_weights = image_weights_all.mean(dim=1)
+    image_weights = image_weights / image_weights.norm(dim=1, keepdim=True)
 
-            test_loader = build_data_loader(data_source=dataset.test, batch_size=64, is_train=False, shuffle=False)
-            val_loader = build_data_loader(data_source=dataset.val, batch_size=64, is_train=False, shuffle=False)
-
-            test_features, test_labels = pre_load_features(cfg, "test", model, test_loader)
-            val_features, val_labels = pre_load_features(cfg, "val", model, val_loader)
-
-            clip_weights = clip_classifier(cfg, dataset.classnames, dataset.template, model.float())
-
-            notune_acc = run(
-                cfg,
-                train_loader_cache,
-                clip_weights,
-                model,
-                test_features,
-                test_labels,
-                val_features,
-                val_labels,
-            )
-            notune_accs[str(cfg["seed"])].append(notune_acc)
-    print("Evaluate on dataset:", cfg["dataset"])
-    print("Evaluate on seed [1, 2, 3]")
-    print("Evaluate on shots [1, 2, 4, 8, 16]")
-    print("No tuning:")
-    notune = []
-    for seed in ["1", "2", "3"]:
-        print("seed %s" % seed, notune_accs[str(seed)])
-        notune.append(notune_accs[seed])
-    notune = torch.tensor(notune)
-    print("Average: ", notune.mean(dim=0))
+    clip_weights_IGT, matching_score = image_guide_text(cfg, clip_weights_cupl_all, image_weights, return_matching=True)
+    clip_weights_IGT = clip_weights_IGT.t()
+    metric = {}
+    acc_free = PointGDA(
+        cfg,
+        val_features,
+        val_labels,
+        test_features,
+        test_labels,
+        clip_weights_IGT,
+        clip_weights_cupl_all,
+        matching_score,
+        grid_search=False,
+        is_print=True,
+    )
+    metric["TIMO"] = acc_free
 
 
 if __name__ == "__main__":
