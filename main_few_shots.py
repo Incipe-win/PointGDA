@@ -19,6 +19,8 @@ import numpy as np
 
 from sklearn.covariance import LedoitWolf, OAS, GraphicalLassoCV, GraphicalLasso
 from torchvision.transforms import v2
+from models import ULIP_models
+from collections import OrderedDict
 
 
 def real_proj(pc, imsize=224):
@@ -31,15 +33,15 @@ def real_proj(pc, imsize=224):
 def get_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", dest="config", help="settings of Tip-Adapter in yaml format")
+    parser.add_argument("--output-dir", default="./outputs", type=str, help="output dir")
+    parser.add_argument("--test_ckpt_addr", default="", help="the ckpt to test 3d zero shot")
+    parser.add_argument("--evaluate_3d", action="store_true", help="eval ulip only")
+    parser.add_argument("--npoints", default=2048, type=int, help="number of points used for pre-train and test.")
     args = parser.parse_args()
     return args
 
 
 def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_labels, val_features, val_labels):
-    # view_weights = torch.Tensor(
-    #     best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
-    # ).cuda()
-
     # Parameter Estimation.
     with torch.no_grad():
         # Ours
@@ -48,12 +50,9 @@ def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_l
         for i in range(cfg["augment_epoch"]):
             for pc, target in tqdm(train_loader_cache):
                 pc, target = pc.cuda(), target.cuda()
-                images = real_proj(pc).type(clip_model.dtype)
-                image_features = clip_model.encode_image(images)
-                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-                # image_features = image_features.reshape(-1, cfg["num_views"], 512) * view_weights.reshape(1, -1, 1)
-                image_features = image_features.reshape(-1, cfg["num_views"] * 512).type(clip_model.dtype)
-                vecs.append(image_features)
+                pc = clip_model.encode_pc(pc)
+                pc = pc / pc.norm(dim=-1, keepdim=True)
+                vecs.append(pc)
                 labels.append(target)
         vecs = torch.cat(vecs)
         labels = torch.cat(labels)
@@ -72,9 +71,9 @@ def run(cfg, train_loader_cache, clip_weights, clip_model, test_features, test_l
         W = torch.einsum("nd, dc -> cn", mus, cov_inv)
         b = ps.log() - torch.einsum("nd, dc, nc -> n", mus, cov_inv, mus) / 2
 
-        # print(
-        #     f"val_features shape is {val_features.shape}, clip_weights shape is {clip_weights.shape}, W shape is {W.shape}, test_features shape is {test_features.shape}"
-        # )
+        print(
+            f"val_features shape is {val_features.shape}, clip_weights shape is {clip_weights.shape}, W shape is {W.shape}, test_features shape is {test_features.shape}"
+        )
 
         # Evaluate
         # Grid search for hyper-parameter alpha
@@ -107,10 +106,16 @@ def main():
     print("\nRunning configs.")
     print(cfg, "\n")
 
+    ckpt = torch.load(args.test_ckpt_addr, weights_only=False)
+    state_dict = OrderedDict()
+    for k, v in ckpt["state_dict"].items():
+        state_dict[k.replace("module.", "")] = v
+
     # CLIP
-    clip_model, preprocess = clip.load(cfg["backbone"])
-    clip_model.eval()
-    for p in clip_model.parameters():
+    model = ULIP_models.ULIP_PointBERT(args).cuda()
+    model.load_state_dict(state_dict, strict=True)
+    model.eval()
+    for p in model.parameters():
         p.requires_grad = False
 
     notune_accs = {"1": [], "2": [], "3": []}
@@ -136,16 +141,16 @@ def main():
             test_loader = build_data_loader(data_source=dataset.test, batch_size=64, is_train=False, shuffle=False)
             val_loader = build_data_loader(data_source=dataset.val, batch_size=64, is_train=False, shuffle=False)
 
-            test_features, test_labels = pre_load_features(cfg, "test", clip_model, test_loader, preprocess)
-            val_features, val_labels = pre_load_features(cfg, "val", clip_model, val_loader, preprocess)
+            test_features, test_labels = pre_load_features(cfg, "test", model, test_loader)
+            val_features, val_labels = pre_load_features(cfg, "val", model, val_loader)
 
-            clip_weights = clip_classifier(cfg, dataset.classnames, dataset.template, clip_model.float())
+            clip_weights = clip_classifier(cfg, dataset.classnames, dataset.template, model.float())
 
             notune_acc = run(
                 cfg,
                 train_loader_cache,
                 clip_weights,
-                clip_model,
+                model,
                 test_features,
                 test_labels,
                 val_features,

@@ -1,4 +1,4 @@
-from torch_scatter import scatter
+# from torch_scatter import scatter
 import torch.nn as nn
 import numpy as np
 import torch

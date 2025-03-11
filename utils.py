@@ -24,22 +24,39 @@ class Textual_Encoder(nn.Module):
         self.cfg = cfg
         self.classnames = classnames
         self.clip_model = clip_model
-        self.dtype = clip_model.dtype
 
     def forward(self):
-        prompts = best_prompt_weight[
-            "{}_{}_test_prompts".format(self.cfg["dataset"].lower(), self.cfg["backbone_name"])
-        ]
+        prompts = best_prompt_weight["{}_{}_test_prompts".format(self.cfg["dataset"], self.cfg["backbone_name"])]
         prompts = torch.cat([clip.tokenize(p) for p in prompts]).cuda()
-        text_feat = self.clip_model.encode_text(prompts).repeat(1, self.cfg["num_views"])
+        text_feat = self.clip_model.encode_text(prompts)
         return text_feat
 
 
 def clip_classifier(cfg, classnames, template, clip_model):
     textual_encoder = Textual_Encoder(cfg, classnames, clip_model)
     text_feat = textual_encoder()
-    text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True)
+    text_feat /= text_feat.norm(dim=-1, keepdim=True)
     return text_feat.t()
+
+
+# def clip_classifier(cfg, classnames, template, clip_model):
+#     with torch.no_grad():
+#         clip_weights = []
+
+#         for classname in classnames:
+#             # Tokenize the prompts
+#             classname = classname.replace("_", " ")
+#             texts = [t.format(classname) for t in template]
+#             texts = clip.tokenize(texts).cuda()
+#             # prompt ensemble for ImageNet
+#             class_embeddings = clip_model.encode_text(texts)
+#             class_embeddings /= class_embeddings.norm(dim=-1, keepdim=True)
+#             class_embedding = class_embeddings.mean(dim=0)
+#             class_embedding /= class_embedding.norm()
+#             clip_weights.append(class_embedding)
+
+#         clip_weights = torch.stack(clip_weights, dim=1).cuda()
+#     return clip_weights
 
 
 def real_proj(pc, imsize=224):
@@ -91,28 +108,32 @@ def save_projection_images(pc, images, batch_idx, base_dir="projected_images"):
         collage.save(os.path.join(pc_dir, "collage.jpg"))
 
 
-def pre_load_features(cfg, split, clip_model, loader, preprocess, norm=True):
+def pre_load_features(cfg, split, model, loader, norm=True):
     features, labels = [], []
-    view_weights = torch.Tensor(
-        best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
-    ).cuda()
+    # view_weights = torch.Tensor(
+    #     best_prompt_weight["{}_{}_test_weights".format(cfg["dataset"].lower(), cfg["backbone_name"])]
+    # ).cuda()
 
     with torch.no_grad():
         for i, (pc, target) in enumerate(tqdm(loader)):
             pc, target = pc.cuda(), target.cuda()
-            images = real_proj(pc).type(clip_model.dtype)
-
+            # images = real_proj(pc).type(clip_model.dtype)
+            pc = model.encode_pc(pc)
+            if norm:
+                pc /= pc.norm(dim=-1, keepdim=True)
+            features.append(pc)
+            labels.append(target)
             # images_visual = images.view(-1, cfg["num_views"], 3, 224, 224)
             # save_projection_images(pc, images_visual, i)
 
             # ViT/B: channel 512
-            image_features = clip_model.encode_image(images)
-            if norm:
-                image_features /= image_features.norm(dim=-1, keepdim=True)
-            image_features = image_features.reshape(-1, cfg["num_views"], 512) * view_weights.reshape(1, -1, 1)
-            image_features = image_features.reshape(-1, cfg["num_views"] * 512).type(clip_model.dtype)
-            features.append(image_features)
-            labels.append(target)
+            # image_features = clip_model.encode_image(images)
+            # if norm:
+            #     image_features /= image_features.norm(dim=-1, keepdim=True)
+            # image_features = image_features.reshape(-1, cfg["num_views"], 512) * view_weights.reshape(1, -1, 1)
+            # image_features = image_features.reshape(-1, cfg["num_views"] * 512).type(clip_model.dtype)
+            # features.append(image_features)
+            # labels.append(target)
 
     features, labels = torch.cat(features), torch.cat(labels)
     return features, labels

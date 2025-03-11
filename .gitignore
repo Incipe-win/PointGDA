@@ -177,3 +177,5 @@ cython_debug/
 data
 projected_images
 caches
+initialize_model
+ckpt

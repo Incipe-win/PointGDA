@@ -64,8 +64,8 @@ class ScanObjectNN(DatasetBase):
 
     def read_data(self):
         """Read official train/test split"""
-        train_file = os.path.join(self.dataset_dir, "training_objectdataset.h5")
-        test_file = os.path.join(self.dataset_dir, "test_objectdataset.h5")
+        train_file = os.path.join(self.dataset_dir, "main_split", "training_objectdataset_augmentedrot_scale75.h5")
+        test_file = os.path.join(self.dataset_dir, "main_split", "test_objectdataset_augmentedrot_scale75.h5")
 
         # Read training data
         train_data = self._read_hdf5_data(train_file)
