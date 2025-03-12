@@ -179,3 +179,4 @@ projected_images
 caches
 initialize_model
 ckpt
+caches_backup
