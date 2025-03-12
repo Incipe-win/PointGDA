@@ -291,3 +291,26 @@ def vec_sort(vecs_t, matching_score):
         sort_vecs_t = sort_vecs_t.unsqueeze(1)
 
     return sort_vecs_t, weights
+
+
+def image_guide_text_search(cfg, clip_weights_cupl_all, val_features, val_labels, image_weights):
+    best_acc = 0
+    best_gamma = 0
+    for gamma in range(5, 101, 5):
+        clip_weights_cupl_IGT, matching_score = image_guide_text(
+            cfg, clip_weights_cupl_all, image_weights, return_matching=True, gamma=gamma
+        )
+        clip_weights_cupl_IGT = clip_weights_cupl_IGT.t()  # D, C
+
+        val_logits = val_features @ clip_weights_cupl_IGT  # N, C
+        acc = (val_logits.argmax(-1) == val_labels).sum() / len(val_labels)
+
+        if acc > best_acc:
+            best_acc = acc
+            best_gamma = gamma
+    print("best_gamma:", best_gamma)
+    clip_weights_cupl_IGT, matching_score = image_guide_text(
+        cfg, clip_weights_cupl_all, image_weights, return_matching=True, gamma=best_gamma
+    )
+    clip_weights_cupl_IGT = clip_weights_cupl_IGT.t()
+    return clip_weights_cupl_IGT, matching_score
