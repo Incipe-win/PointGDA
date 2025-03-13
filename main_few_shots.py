@@ -24,13 +24,6 @@ from collections import OrderedDict
 from PointGDA import PointGDA
 
 
-def real_proj(pc, imsize=224):
-    pc_views = Realistic_Projection()
-    img = pc_views.get_img(pc).cuda()
-    img = torch.nn.functional.interpolate(img, size=(imsize, imsize), mode="bilinear", align_corners=True)
-    return img
-
-
 def get_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", dest="config", help="settings of Tip-Adapter in yaml format")
