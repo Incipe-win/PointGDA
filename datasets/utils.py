@@ -71,7 +71,7 @@ class Datum:
         classname (str): class name.
     """
 
-    def __init__(self, impath="", label=0, domain=-1, classname=""):
+    def __init__(self, impath="", label=0, domain=-1, classname="", rgb=""):
         # assert isinstance(impath, str)
         # assert isinstance(label, int)
         # assert isinstance(domain, int)
@@ -81,6 +81,11 @@ class Datum:
         self._label = label
         self._domain = domain
         self._classname = classname
+        self._rgb = rgb
+
+    @property
+    def rgb(self):
+        return self._rgb
 
     @property
     def impath(self):
@@ -314,39 +319,8 @@ class DatasetWrapper(TorchDataset):
     def __getitem__(self, idx):
         item = self.data_source[idx]
 
-        output = {"label": item.label, "domain": item.domain, "impath": item.impath}
-
-        # img0 = read_image(item.impath)
-        # img0 = item.impath
-
-        # if self.transform is not None:
-        #     if isinstance(self.transform, (list, tuple)):
-        #         for i, tfm in enumerate(self.transform):
-        #             img = self._transform_image(tfm, img0)
-        #             keyname = "img"
-        #             if (i + 1) > 1:
-        #                 keyname += str(i + 1)
-        #             output[keyname] = img
-        #     else:
-        #         img = self._transform_image(self.transform, img0)
-        #         output["img"] = img
-
-        # if self.return_img0:
-        #     output["img0"] = self.to_tensor(img0)
-
-        # return output["img"], output["label"]
-        return output["impath"], output["label"]
-
-    def _transform_image(self, tfm, img0):
-        img_list = []
-
-        for k in range(self.k_tfm):
-            img_list.append(tfm(img0))
-
-        img = img_list
-        if len(img) == 1:
-            img = img[0]
-        return img
+        output = {"label": item.label, "domain": item.domain, "impath": item.impath, "rgb": item.rgb}
+        return output["impath"], output["label"], output["rgb"]
 
 
 def build_data_loader(

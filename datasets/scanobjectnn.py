@@ -48,10 +48,12 @@ class ScanObjectNN(DatasetBase):
                 point_cloud = torch.from_numpy(points[i]).float()
                 point_cloud = self._normalize_pointcloud(point_cloud)
 
+                rgb = torch.ones_like(point_cloud) * 0.4
+
                 label = labels[i]
                 classname = self.class_names[label]
 
-                data.append(Datum(impath=point_cloud, label=label, classname=classname))
+                data.append(Datum(impath=point_cloud, label=label, classname=classname, rgb=rgb))
         return data
 
     def _normalize_pointcloud(self, pointcloud):
@@ -117,7 +119,8 @@ if __name__ == "__main__":
     print(train_loader)
     print(len(train_loader))
 
-    for _, (pc, target) in enumerate(tqdm(train_loader)):
-        points, target = pc.cuda(), target.cuda()
-        print(points.shape)
+    for _, (pc, target, rgb) in enumerate(tqdm(train_loader)):
+        points, target, rgb = pc.cuda(), target.cuda(), rgb.cuda()
+        print(rgb)
+        print(points.shape, rgb.shape)
         break

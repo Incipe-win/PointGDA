@@ -49,12 +49,17 @@ class ModelNet40(DatasetBase):
                 point_cloud = torch.from_numpy(points[i]).float()
                 point_cloud = self._normalize_pointcloud(point_cloud)
 
+                # add rgb datas
+                rgb = torch.ones_like(point_cloud) * 0.4
+
                 label = labels[i]
                 classname = self.class_names[label]
 
                 # For Datum, we store the tensor in 'impath' field temporarily
                 # (Will handle properly in DatasetWrapper)
-                data.append(Datum(impath=point_cloud, label=label, classname=classname))  # Storing tensor directly
+                data.append(
+                    Datum(impath=point_cloud, label=label, classname=classname, rgb=rgb)
+                )  # Storing tensor directly
         return data
 
     def _normalize_pointcloud(self, pointcloud):
@@ -126,50 +131,17 @@ if __name__ == "__main__":
     import yaml
     from tqdm import tqdm
 
-    # from proj import Realistic_Projection
-
-    # def real_proj(pc, imsize=224):
-    #     pc_views = Realistic_Projection()
-    #     img = pc_views.get_img(pc).cuda()
-    #     img = torch.nn.functional.interpolate(img, size=(imsize, imsize), mode="bilinear", align_corners=True)
-    #     return img
-
-    # class PointcloudRotate:
-    #     """随机旋转点云增强"""
-
-    #     def __call__(self, points):
-    #         angle = np.random.uniform() * 2 * np.pi
-    #         cosval = np.cos(angle)
-    #         sinval = np.sin(angle)
-    #         rotation_matrix = torch.tensor(
-    #             [[cosval, -sinval, 0], [sinval, cosval, 0], [0, 0, 1]],
-    #             dtype=torch.float32,
-    #         )
-    #         return torch.mm(points, rotation_matrix)
-
-    # transform = T.Compose(
-    #     [
-    #         PointcloudRotate(),
-    #     ]
-    # )
-    train_tranform = transforms.Compose(
-        [
-            transforms.RandomResizedCrop(size=224, scale=(0.5, 1), interpolation=transforms.InterpolationMode.BICUBIC),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711)),
-        ]
-    )
     cfg = yaml.load(
         open("/workspace/code/deep_learning/PointGDA/configs/modelnet40.yaml", "r"),
         Loader=yaml.Loader,
     )
     dataset = build_dataset(cfg["dataset"], cfg["root_path"], cfg["shots"])
-    train_loader = build_data_loader(dataset.train_x, batch_size=1, tfm=train_tranform, is_train=True)
+    train_loader = build_data_loader(dataset.train_x, batch_size=1, is_train=True)
     print(train_loader)
     print(len(train_loader))
 
-    for _, (pc, target) in enumerate(tqdm(train_loader)):
-        points, target = pc.cuda(), target.cuda()
-        print(points.shape)
+    for _, (pc, target, rgb) in enumerate(tqdm(train_loader)):
+        points, target, rgb = pc.cuda(), target.cuda(), rgb.cuda()
+        print(rgb)
+        print(points.shape, rgb.shape)
         break
