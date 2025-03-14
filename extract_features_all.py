@@ -29,9 +29,10 @@ def extract_few_shot_feature(cfg, model, train_loader_cache, norm=True):
         for augment_idx in range(cfg["augment_epoch"]):
             train_features = []
             print("Augment Epoch: {:} / {:}".format(augment_idx, cfg["augment_epoch"]))
-            for i, (pc, target) in enumerate(tqdm(train_loader_cache)):
-                pc = pc.cuda()
-                pc_features = get_model(model).encode_pc(pc)  # 100, 3, 224, 224
+            for i, (pc, target, rgb) in enumerate(tqdm(train_loader_cache)):
+                pc, rgb = pc.cuda(), rgb.cuda()
+                feature = torch.cat((pc, rgb), dim=-1)
+                pc_features = get_model(model).encode_pc(feature)  # 100, 3, 224, 224
                 train_features.append(pc_features)
                 if augment_idx == 0:
                     target = target.cuda()
@@ -59,9 +60,10 @@ def extract_few_shot_feature_all(cfg, model, train_loader_cache, norm=True):
         vecs = []
         labels = []
         for i in range(cfg["augment_epoch"]):
-            for pc, target in tqdm(train_loader_cache):
-                pc, target = pc.cuda(), target.cuda()
-                pc_features = get_model(model).encode_pc(pc)
+            for pc, target, rgb in tqdm(train_loader_cache):
+                pc, target, rgb = pc.cuda(), target.cuda(), rgb.cuda()
+                feature = torch.cat((pc, rgb), dim=-1)
+                pc_features = get_model(model).encode_pc(feature)
                 if norm:
                     pc_features = pc_features / pc_features.norm(dim=-1, keepdim=True)
                 vecs.append(pc_features)
@@ -80,9 +82,10 @@ def extract_few_shot_feature_all(cfg, model, train_loader_cache, norm=True):
 def extract_val_test_feature(cfg, split, model, loader, norm=True):
     features, labels = [], []
     with torch.no_grad():
-        for i, (pc, target) in enumerate(tqdm(loader)):
-            pc, target = pc.cuda(), target.cuda()
-            pc_features = get_model(model).encode_pc(pc)
+        for i, (pc, target, rgb) in enumerate(tqdm(loader)):
+            pc, target, rgb = pc.cuda(), target.cuda(), rgb.cuda()
+            feature = torch.cat((pc, rgb), dim=-1)
+            pc_features = get_model(model).encode_pc(feature)
             if norm:
                 pc_features /= pc_features.norm(dim=-1, keepdim=True)
             features.append(pc_features)
@@ -217,13 +220,12 @@ if __name__ == "__main__":
                     data_source=dataset.train_x,
                     batch_size=32,
                     is_train=True,
-                    shuffle=False,
+                    shuffle=True,
                 )
 
                 # Construct the cache model by few-shot training set
                 print("\nConstructing cache model by few-shot visual features and labels.")
                 extract_few_shot_feature(cfg, model, train_loader_cache)
-                extract_few_shot_feature_all(cfg, model, train_loader_cache, norm=norm)
 
             # Extract val/test features
             print("\nLoading visual features and labels from val and test set.")
