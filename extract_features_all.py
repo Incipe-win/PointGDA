@@ -226,6 +226,7 @@ if __name__ == "__main__":
                 # Construct the cache model by few-shot training set
                 print("\nConstructing cache model by few-shot visual features and labels.")
                 extract_few_shot_feature(cfg, model, train_loader_cache)
+                extract_few_shot_feature_all(cfg, model, train_loader_cache, norm=norm)
 
             # Extract val/test features
             print("\nLoading visual features and labels from val and test set.")

@@ -19,31 +19,27 @@ def get_model(model):
 
 def load_text_feature(cfg):
     save_path = cfg["cache_dir"] + "/text_weights_gpt_t.pt"
-    clip_weights = torch.load(save_path, weights_only=False)
+    clip_weights = torch.load(save_path)
     return clip_weights
 
 
 def load_few_shot_feature(cfg, norm=True):
     if norm:
-        cache_keys = torch.load(cfg["cache_dir"] + "/keys_" + str(cfg["shots"]) + "shots.pt", weights_only=False)
-        cache_values = torch.load(cfg["cache_dir"] + "/values_" + str(cfg["shots"]) + "shots.pt", weights_only=False)
+        cache_keys = torch.load(cfg["cache_dir"] + "/keys_" + str(cfg["shots"]) + "shots.pt")
+        cache_values = torch.load(cfg["cache_dir"] + "/values_" + str(cfg["shots"]) + "shots.pt")
     else:
-        cache_keys = torch.load(
-            cfg["cache_dir"] + "/keys_" + str(cfg["shots"]) + "shots_unnormed.pt", weights_only=False
-        )
-        cache_values = torch.load(
-            cfg["cache_dir"] + "/values_" + str(cfg["shots"]) + "shots_unnormed.pt", weights_only=False
-        )
+        cache_keys = torch.load(cfg["cache_dir"] + "/keys_" + str(cfg["shots"]) + "shots_unnormed.pt")
+        cache_values = torch.load(cfg["cache_dir"] + "/values_" + str(cfg["shots"]) + "shots_unnormed.pt")
     return cache_keys, cache_values
 
 
 def loda_val_test_feature(cfg, split, norm=True):
     if norm:
-        features = torch.load(cfg["cache_dir"] + "/" + split + "_f.pt", weights_only=False)
-        labels = torch.load(cfg["cache_dir"] + "/" + split + "_l.pt", weights_only=False)
+        features = torch.load(cfg["cache_dir"] + "/" + split + "_f.pt")
+        labels = torch.load(cfg["cache_dir"] + "/" + split + "_l.pt")
     else:
-        features = torch.load(cfg["cache_dir"] + "/" + split + "_f_unnormed.pt", weights_only=False)
-        labels = torch.load(cfg["cache_dir"] + "/" + split + "_l_unnormed.pt", weights_only=False)
+        features = torch.load(cfg["cache_dir"] + "/" + split + "_f_unnormed.pt")
+        labels = torch.load(cfg["cache_dir"] + "/" + split + "_l_unnormed.pt")
     return features, labels
 
 

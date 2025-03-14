@@ -57,8 +57,8 @@ def PointGDA(
     with torch.no_grad():
         # Image Vecs
         if vecs_labels is None:
-            vecs_v = torch.load(cfg["cache_dir"] + "/" + f"{cfg['shots']}_vecs_f.pt", weights_only=False).float()
-            labels_v = torch.load(cfg["cache_dir"] + "/" + f"{cfg['shots']}_labels_f.pt", weights_only=False).float()
+            vecs_v = torch.load(cfg["cache_dir"] + "/" + f"{cfg['shots']}_vecs_f.pt").float()
+            labels_v = torch.load(cfg["cache_dir"] + "/" + f"{cfg['shots']}_labels_f.pt").float()
         else:
             vecs_v, labels_v = vecs_labels[0], vecs_labels[1]
 

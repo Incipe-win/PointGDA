@@ -2,24 +2,8 @@ import os
 import random
 import argparse
 import yaml
-from tqdm import tqdm
-
 import torch
-import torch.nn.functional as F
-import torch.nn as nn
-import torchvision.transforms as transforms
-
-from datasets import build_dataset
-from datasets.utils import build_data_loader
-import clip
-from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
 from utils import *
-from torch.autograd import Variable
-import numpy as np
-
-from sklearn.covariance import LedoitWolf, OAS, GraphicalLassoCV, GraphicalLasso
-from torchvision.transforms import v2
-from models import ULIP_models
 from collections import OrderedDict
 from PointGDA import PointGDA
 
@@ -27,10 +11,6 @@ from PointGDA import PointGDA
 def get_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", dest="config", help="settings of Tip-Adapter in yaml format")
-    parser.add_argument("--output-dir", default="./outputs", type=str, help="output dir")
-    parser.add_argument("--test_ckpt_addr", default="", help="the ckpt to test 3d zero shot")
-    parser.add_argument("--evaluate_3d", action="store_true", help="eval ulip only")
-    parser.add_argument("--npoints", default=2048, type=int, help="number of points used for pre-train and test.")
     parser.add_argument("--shot", dest="shot", type=int, default=1, help="shots number")
     parser.add_argument("--seed", dest="seed", type=int, default=1, help="seed")
     parser.add_argument("--dbg", dest="dbg", type=float, default=0, help="debug mode")
@@ -53,22 +33,10 @@ def main():
 
     if not os.path.exists("outputs"):
         os.makedirs("outputs")
-    cache_dir = os.path.join(f'./caches/{cfg["backbone"]}/{cfg["seed"]}/{cfg["dataset"]}')
+    cache_dir = os.path.join(f'./caches/create_uni3d/{cfg["seed"]}/{cfg["dataset"]}')
     os.makedirs(cache_dir, exist_ok=True)
     cfg["cache_dir"] = cache_dir
     print(cfg)
-
-    ckpt = torch.load(args.test_ckpt_addr, weights_only=False)
-    state_dict = OrderedDict()
-    for k, v in ckpt["state_dict"].items():
-        state_dict[k.replace("module.", "")] = v
-
-    # CLIP
-    model = ULIP_models.ULIP_PointBERT(args).cuda()
-    model.load_state_dict(state_dict, strict=True)
-    model.eval()
-    for p in model.parameters():
-        p.requires_grad = False
 
     # Prepare dataset
     random.seed(cfg["seed"])
@@ -76,7 +44,7 @@ def main():
 
     # Textual features
     print("\nGetting textual features as CLIP's classifier.")
-    clip_weights_cupl_all = torch.load(cfg["cache_dir"] + "/text_weights_cupl_t_all.pt", weights_only=False)
+    clip_weights_cupl_all = torch.load(cfg["cache_dir"] + "/text_weights_cupl_t_all.pt")
     cate_num, prompt_cupl_num, dim = clip_weights_cupl_all.shape
     print(f"cate_num is {cate_num}, prompt_cupl_num is {prompt_cupl_num}, dim is {dim}")
     clip_weights_cupl = clip_weights_cupl_all.mean(dim=1).t()
