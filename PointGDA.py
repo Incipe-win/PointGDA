@@ -1,39 +1,54 @@
 from utils import *
+from sklearn.mixture import GaussianMixture
+import numpy as np
 
 
-def GDA(vecs, labels, clip_weights, val_features, val_labels, alpha_shift=False):
-    # normal distribution
-    mus = torch.cat([vecs[labels == i].mean(dim=0, keepdim=True) for i in range(clip_weights.shape[1])])
-
-    # KS Estimator.
-    center_vecs = torch.cat([vecs[labels == i] - mus[i].unsqueeze(0) for i in range(clip_weights.shape[1])])
-    cov_inv = center_vecs.shape[1] * torch.linalg.pinv(
-        (center_vecs.shape[0] - 1) * center_vecs.T.cov()
-        + center_vecs.T.cov().trace() * torch.eye(center_vecs.shape[1]).cuda()
-    )
-
-    ps = torch.ones(clip_weights.shape[1]).cuda() * 1.0 / clip_weights.shape[1]
-    W = torch.einsum("nd, dc -> cn", mus, cov_inv)
-    b = ps.log() - torch.einsum("nd, dc, nc -> n", mus, cov_inv, mus) / 2
-
-    # Evaluate
-    # Grid search for hyper-parameter alpha
-    best_val_acc = 0
-    best_alpha = 0.1
-    for alpha in [10**i for i in range(-4, 5)]:  # [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
-        if alpha_shift:
-            val_logits = alpha * val_features.float() @ clip_weights.float() + val_features.float() @ W + b
+def GDA(vecs, labels, clip_weights, val_features, val_labels, alpha_shift=False, n_components=2):
+    # 计算每个类的GMM混合均值
+    mus = []
+    for i in range(clip_weights.shape[1]):
+        class_mask = labels == i
+        class_data = vecs[class_mask].cpu().numpy()  # 转换为numpy
+        if len(class_data) < n_components:
+            # 样本不足时回退到单高斯
+            mu = torch.mean(vecs[class_mask], dim=0)
         else:
-            val_logits = 100.0 * val_features.float() @ clip_weights.float() + alpha * (val_features.float() @ W + b)
+            gmm = GaussianMixture(n_components=n_components).fit(class_data)
+            # 计算加权平均均值
+            weights = gmm.weights_
+            means = gmm.means_
+            weighted_mu = np.sum(weights[:, np.newaxis] * means, axis=0)
+            mu = torch.tensor(weighted_mu, dtype=torch.float32).cuda()
+        mus.append(mu)
+    mus = torch.stack(mus)
 
+    # 计算中心向量
+    center_vecs = torch.cat([vecs[labels == i] - mus[i] for i in range(clip_weights.shape[1])])
+
+    # 正则化协方差矩阵并求逆
+    d = center_vecs.shape[1]
+    cov = (center_vecs.T @ center_vecs) / (center_vecs.shape[0] - 1)
+    cov_reg = cov + torch.trace(cov) / d * torch.eye(d).cuda()  # 正则化
+    cov_inv = d * torch.linalg.pinv(cov_reg)
+
+    # 计算先验概率和线性参数
+    ps = torch.ones(clip_weights.shape[1]).cuda() / clip_weights.shape[1]
+    W = torch.einsum("nd,dc->cn", mus, cov_inv)
+    b = ps.log() - 0.5 * torch.einsum("nd,dc,nc->n", mus, cov_inv, mus)
+
+    # 超参数搜索
+    best_val_acc, best_alpha = 0, 0.1
+    for alpha in [10**i for i in range(-4, 5)]:
+        if alpha_shift:
+            val_logits = alpha * val_features @ clip_weights + val_features @ W + b
+        else:
+            val_logits = 100.0 * val_features @ clip_weights + alpha * (val_features @ W + b)
         acc = cls_acc(val_logits, val_labels)
         if acc > best_val_acc:
-            best_val_acc = acc
-            best_alpha = alpha
+            best_val_acc, best_alpha = acc, alpha
 
-    print("best_val_alpha: %s \t best_val_acc: %s" % (best_alpha, best_val_acc))
-    alpha = best_alpha
-    return alpha, W, b, best_val_acc
+    print(f"best_val_alpha: {best_alpha}\tbest_val_acc: {best_val_acc}")
+    return best_alpha, W, b, best_val_acc
 
 
 def PointGDA(
