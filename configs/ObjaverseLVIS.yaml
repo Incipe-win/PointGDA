@@ -1,0 +1,13 @@
+# ------ root_path/dataset_name ------
+root_path: "data"
+
+# ------ Basic Config ------
+dataset: "objaverse"
+shots: 16
+backbone: "ULIP_VITB16"
+backbone_name: "vit_b16"
+
+subsample_classes: "base"
+augment_epoch: 10
+
+num_views: 10

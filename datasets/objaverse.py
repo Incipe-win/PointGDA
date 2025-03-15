@@ -1,0 +1,184 @@
+import os
+import random
+import numpy as np
+from collections import defaultdict
+import torch
+
+from datasets.utils import Datum, DatasetBase, build_data_loader
+
+template = [
+    "a point cloud model of {}.",
+    "There is a {} in the scene.",
+    "There is the {} in the scene.",
+    "a photo of a {} in the scene.",
+    "a photo of the {} in the scene.",
+    "a photo of one {} in the scene.",
+    "itap of a {}.",
+    "itap of my {}.",
+    "itap of the {}.",
+    "a photo of a {}.",
+    "a photo of my {}.",
+    "a photo of the {}.",
+    "a photo of one {}.",
+    "a photo of many {}.",
+    "a good photo of a {}.",
+    "a good photo of the {}.",
+    "a bad photo of a {}.",
+    "a bad photo of the {}.",
+    "a photo of a nice {}.",
+    "a photo of the nice {}.",
+    "a photo of a cool {}.",
+    "a photo of the cool {}.",
+    "a photo of a weird {}.",
+    "a photo of the weird {}.",
+    "a photo of a small {}.",
+    "a photo of the small {}.",
+    "a photo of a large {}.",
+    "a photo of the large {}.",
+    "a photo of a clean {}.",
+    "a photo of the clean {}.",
+    "a photo of a dirty {}.",
+    "a photo of the dirty {}.",
+    "a bright photo of a {}.",
+    "a bright photo of the {}.",
+    "a dark photo of a {}.",
+    "a dark photo of the {}.",
+    "a photo of a hard to see {}.",
+    "a photo of the hard to see {}.",
+    "a low resolution photo of a {}.",
+    "a low resolution photo of the {}.",
+    "a cropped photo of a {}.",
+    "a cropped photo of the {}.",
+    "a close-up photo of a {}.",
+    "a close-up photo of the {}.",
+    "a jpeg corrupted photo of a {}.",
+    "a jpeg corrupted photo of the {}.",
+    "a blurry photo of a {}.",
+    "a blurry photo of the {}.",
+    "a pixelated photo of a {}.",
+    "a pixelated photo of the {}.",
+    "a black and white photo of the {}.",
+    "a black and white photo of a {}",
+    "a plastic {}.",
+    "the plastic {}.",
+    "a toy {}.",
+    "the toy {}.",
+    "a plushie {}.",
+    "the plushie {}.",
+    "a cartoon {}.",
+    "the cartoon {}.",
+    "an embroidered {}.",
+    "the embroidered {}.",
+    "a painting of the {}.",
+    "a painting of a {}.",
+]
+
+
+class ObjaverseLVIS(DatasetBase):
+    dataset_dir = "objaverse_lvis"
+
+    def __init__(self, root, num_shots):
+        self.dataset_dir = os.path.join(root, self.dataset_dir)
+        self.split_path = os.path.join(self.dataset_dir, "lvis_testset.txt")
+
+        with open(self.split_path, "r") as f:
+            lines = f.readlines()
+
+        self.file_list = []
+        for line in lines:
+            line = line.strip()
+            self.file_list.append(
+                {
+                    "cate_id": line.split(",")[0],
+                    "cate_name": line.split(",")[1],
+                    "model_id": line.split(",")[2],
+                    "point_path": self.dataset_dir + line.split(",")[3].replace("\n", ""),
+                }
+            )
+
+        self.template = template
+
+        # Read and process dataset splits
+        train, val, test = self.read_data()
+        train = self.generate_fewshot_dataset(train, num_shots=num_shots)
+
+        super().__init__(train_x=train, val=val, test=test)
+
+    def _normalize_pointcloud(self, pointcloud):
+        """Normalize point cloud to [-1,1] range"""
+        centroid = torch.mean(pointcloud, dim=0)
+        pointcloud -= centroid
+        max_dist = torch.max(torch.sqrt(torch.sum(pointcloud**2, dim=1)))
+        pointcloud /= max_dist
+        return pointcloud
+
+    def read_data(self):
+        data = []
+        for idx in range(len(self.file_list)):
+            sample = self.file_list[idx]
+            cate_id, cate_name, model_id, point_path = (
+                sample["cate_id"],
+                sample["cate_name"],
+                sample["model_id"],
+                sample["point_path"],
+            )
+
+            openshape_data = np.load(point_path, allow_pickle=True).item()
+            pc_data = openshape_data["xyz"].astype(np.float32)
+            pc_data = torch.from_numpy(pc_data).float()
+            rgb = openshape_data["rgb"].astype(np.float32)
+            rgb = torch.from_numpy(rgb).float()
+            pc_data = self._normalize_pointcloud(pc_data)
+            cate_id = np.int32(int(cate_id))
+            data.append(Datum(impath=pc_data, label=cate_id, classname=cate_name, rgb=rgb))
+
+        # train, test = self.split_trainval(data, p_val=0.8)
+        train = data
+        test = data
+        val = test
+
+        return train, val, test
+
+    @staticmethod
+    def split_trainval(trainval, p_val=0.2):
+        p_trn = 1 - p_val
+        print(f"Splitting trainval into {p_trn:.0%} train and {p_val:.0%} val")
+        tracker = defaultdict(list)
+        for idx, item in enumerate(trainval):
+            label = item.label
+            tracker[label].append(idx)
+
+        train, val = [], []
+        for label, idxs in tracker.items():
+            n_val = round(len(idxs) * p_val)
+            assert n_val > 0
+            random.shuffle(idxs)
+            for n, idx in enumerate(idxs):
+                item = trainval[idx]
+                if n < n_val:
+                    val.append(item)
+                else:
+                    train.append(item)
+
+        return train, val
+
+
+if __name__ == "__main__":
+    from datasets import build_dataset
+    import yaml
+    from tqdm import tqdm
+
+    cfg = yaml.load(
+        open("/workspace/code/deep_learning/PointGDA/configs/ObjaverseLVIS.yaml", "r"),
+        Loader=yaml.Loader,
+    )
+    dataset = build_dataset(cfg["dataset"], cfg["root_path"], cfg["shots"])
+    train_loader = build_data_loader(dataset.train_x, batch_size=1, is_train=True)
+    print(train_loader)
+    print(len(train_loader))
+
+    for _, (pc, target, rgb) in enumerate(tqdm(train_loader)):
+        points, target, rgb = pc.cuda(), target.cuda(), rgb.cuda()
+        print(rgb)
+        print(points.shape, rgb.shape)
+        break
