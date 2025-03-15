@@ -213,12 +213,12 @@ if __name__ == "__main__":
                 cfg["shots"] = k
                 print(cfg)
                 dataset = build_dataset(set, data_path, k)
-                val_loader = build_data_loader(data_source=dataset.val, batch_size=32, is_train=False, shuffle=False)
-                test_loader = build_data_loader(data_source=dataset.test, batch_size=32, is_train=False, shuffle=False)
+                val_loader = build_data_loader(data_source=dataset.val, batch_size=8, is_train=False, shuffle=False)
+                test_loader = build_data_loader(data_source=dataset.test, batch_size=8, is_train=False, shuffle=False)
 
                 train_loader_cache = build_data_loader(
                     data_source=dataset.train_x,
-                    batch_size=32,
+                    batch_size=8,
                     is_train=True,
                     shuffle=True,
                 )
