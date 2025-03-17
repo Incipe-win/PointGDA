@@ -1,0 +1,6 @@
+outs:
+- md5: 37e38bdf70727881e0c059c0ac15e6ab.dir
+  size: 4284305586
+  nfiles: 150
+  hash: md5
+  path: caches

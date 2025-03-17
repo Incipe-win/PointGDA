@@ -1,0 +1,6 @@
+outs:
+- md5: 151953544bb8978dbde042fe0bd800e2.dir
+  size: 4239970459
+  nfiles: 5
+  hash: md5
+  path: ckpt
