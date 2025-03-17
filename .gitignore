@@ -175,8 +175,5 @@ cython_debug/
 
 
 data
-caches_backup
-caches_backup_2
-caches_backup2
 /ckpt
 /caches
