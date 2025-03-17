@@ -3,74 +3,14 @@ import random
 import numpy as np
 from collections import defaultdict
 import torch
+import math
 
 from datasets.utils import Datum, DatasetBase, build_data_loader
 
 template = [
-    "a point cloud model of {}.",
+    "point cloud depth map of a {}.",
     "There is a {} in the scene.",
     "There is the {} in the scene.",
-    "a photo of a {} in the scene.",
-    "a photo of the {} in the scene.",
-    "a photo of one {} in the scene.",
-    "itap of a {}.",
-    "itap of my {}.",
-    "itap of the {}.",
-    "a photo of a {}.",
-    "a photo of my {}.",
-    "a photo of the {}.",
-    "a photo of one {}.",
-    "a photo of many {}.",
-    "a good photo of a {}.",
-    "a good photo of the {}.",
-    "a bad photo of a {}.",
-    "a bad photo of the {}.",
-    "a photo of a nice {}.",
-    "a photo of the nice {}.",
-    "a photo of a cool {}.",
-    "a photo of the cool {}.",
-    "a photo of a weird {}.",
-    "a photo of the weird {}.",
-    "a photo of a small {}.",
-    "a photo of the small {}.",
-    "a photo of a large {}.",
-    "a photo of the large {}.",
-    "a photo of a clean {}.",
-    "a photo of the clean {}.",
-    "a photo of a dirty {}.",
-    "a photo of the dirty {}.",
-    "a bright photo of a {}.",
-    "a bright photo of the {}.",
-    "a dark photo of a {}.",
-    "a dark photo of the {}.",
-    "a photo of a hard to see {}.",
-    "a photo of the hard to see {}.",
-    "a low resolution photo of a {}.",
-    "a low resolution photo of the {}.",
-    "a cropped photo of a {}.",
-    "a cropped photo of the {}.",
-    "a close-up photo of a {}.",
-    "a close-up photo of the {}.",
-    "a jpeg corrupted photo of a {}.",
-    "a jpeg corrupted photo of the {}.",
-    "a blurry photo of a {}.",
-    "a blurry photo of the {}.",
-    "a pixelated photo of a {}.",
-    "a pixelated photo of the {}.",
-    "a black and white photo of the {}.",
-    "a black and white photo of a {}",
-    "a plastic {}.",
-    "the plastic {}.",
-    "a toy {}.",
-    "the toy {}.",
-    "a plushie {}.",
-    "the plushie {}.",
-    "a cartoon {}.",
-    "the cartoon {}.",
-    "an embroidered {}.",
-    "the embroidered {}.",
-    "a painting of the {}.",
-    "a painting of a {}.",
 ]
 
 
@@ -129,12 +69,12 @@ class ObjaverseLVIS(DatasetBase):
             rgb = openshape_data["rgb"].astype(np.float32)
             rgb = torch.from_numpy(rgb).float()
             pc_data = self._normalize_pointcloud(pc_data)
-            cate_id = np.int32(int(cate_id))
+            cate_id = np.array(cate_id).squeeze().astype(np.int64).item()
             data.append(Datum(impath=pc_data, label=cate_id, classname=cate_name, rgb=rgb))
 
-        # train, test = self.split_trainval(data, p_val=0.8)
-        train = data
-        test = data
+        train, test = self.split_trainval(data, p_val=0.8)
+        # train = data
+        # test = data
         val = test
 
         return train, val, test
@@ -150,15 +90,15 @@ class ObjaverseLVIS(DatasetBase):
 
         train, val = [], []
         for label, idxs in tracker.items():
-            n_val = round(len(idxs) * p_val)
-            assert n_val > 0
+            n_val = math.floor(len(idxs) * p_val)
+            # 确保至少有一个样本留在训练集
+            if len(idxs) - n_val < 1:
+                n_val = len(idxs) - 1
             random.shuffle(idxs)
-            for n, idx in enumerate(idxs):
-                item = trainval[idx]
-                if n < n_val:
-                    val.append(item)
-                else:
-                    train.append(item)
+            val_indices = idxs[:n_val]
+            train_indices = idxs[n_val:]
+            val.extend([trainval[i] for i in val_indices])
+            train.extend([trainval[i] for i in train_indices])
 
         return train, val
 
@@ -167,18 +107,24 @@ if __name__ == "__main__":
     from datasets import build_dataset
     import yaml
     from tqdm import tqdm
+    import torch.nn.functional as F
 
     cfg = yaml.load(
-        open("/workspace/code/deep_learning/PointGDA/configs/ObjaverseLVIS.yaml", "r"),
+        open("/workspace/code/deep_learning/PointGDA/configs/objaverse.yaml", "r"),
         Loader=yaml.Loader,
     )
+    cfg["shots"] = 16
     dataset = build_dataset(cfg["dataset"], cfg["root_path"], cfg["shots"])
     train_loader = build_data_loader(dataset.train_x, batch_size=1, is_train=True)
+    test_loader = build_data_loader(dataset.test, batch_size=1, is_train=True)
     print(train_loader)
-    print(len(train_loader))
+    print(len(train_loader), len(test_loader))
 
     for _, (pc, target, rgb) in enumerate(tqdm(train_loader)):
         points, target, rgb = pc.cuda(), target.cuda(), rgb.cuda()
+        print(type(target), target)
+        one_hot = F.one_hot(target).half()
+        print(one_hot)
         print(rgb)
         print(points.shape, rgb.shape)
         break
