@@ -117,7 +117,8 @@ def extract_text_feature_all(cfg, classnames, prompt_paths, clip_model, template
             for prompt in prompts:
                 texts += prompt[classname]
 
-            texts_token = tokenizer(texts)
+            texts_token = tokenizer(texts).cuda()
+            # texts_token = clip.tokenize(texts, truncate=True).cuda()
             # prompt ensemble for ImageNet
             class_embeddings = clip_model.encode_text(texts_token)
             if norm:
@@ -176,7 +177,8 @@ if __name__ == "__main__":
     scanobjectnn = "/workspace/code/deep_learning/PointGDA/prompt/scanobjectnn.json"
     args = get_arguments()
     for seed in [1, 2, 3]:
-        clip_model, _, _ = open_clip.create_model_and_transforms(model_name=args.clip_model, pretrained=args.pretrained)
+        clip_model, _, _ = open_clip.create_model_and_transforms(model_name=args.clip_model)
+        clip_model = clip_model.cuda()
 
         model = create_uni3d(args).cuda()
         checkpoint = torch.load(args.ckpt_path)
@@ -190,6 +192,7 @@ if __name__ == "__main__":
         all_dataset = [
             "modelnet40",
             "scanobjectnn",
+            "objaverse",
         ]
         k_shot = [1, 2, 4, 8, 16]
         norm = True
@@ -213,12 +216,12 @@ if __name__ == "__main__":
                 cfg["shots"] = k
                 print(cfg)
                 dataset = build_dataset(set, data_path, k)
-                val_loader = build_data_loader(data_source=dataset.val, batch_size=8, is_train=False, shuffle=False)
-                test_loader = build_data_loader(data_source=dataset.test, batch_size=8, is_train=False, shuffle=False)
+                val_loader = build_data_loader(data_source=dataset.val, batch_size=32, is_train=False, shuffle=False)
+                test_loader = build_data_loader(data_source=dataset.test, batch_size=32, is_train=False, shuffle=False)
 
                 train_loader_cache = build_data_loader(
                     data_source=dataset.train_x,
-                    batch_size=8,
+                    batch_size=32,
                     is_train=True,
                     shuffle=True,
                 )
@@ -236,7 +239,9 @@ if __name__ == "__main__":
             # [dataset.cupl_path, dataset.waffle_path, dataset.DCLIP_path]
             if set == "modelnet40":
                 extract_text_feature_all(cfg, dataset.classnames, [modelnet40], clip_model, dataset.template, norm=norm)
-            else:
+            elif set == "scanobjectnn":
                 extract_text_feature_all(
                     cfg, dataset.classnames, [scanobjectnn], clip_model, dataset.template, norm=norm
                 )
+            else:
+                extract_text_feature_all(cfg, dataset.classnames, [], clip_model, dataset.template, norm=norm)
