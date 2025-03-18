@@ -237,7 +237,7 @@ if __name__ == "__main__":
                         data_source=dataset.train_x,
                         batch_size=16,
                         is_train=True,
-                        shuffle=True,
+                        shuffle=False,
                     )
 
                 # Construct the cache model by few-shot training set
@@ -259,4 +259,6 @@ if __name__ == "__main__":
                     cfg, dataset.classnames, [scanobjectnn], clip_model, dataset.template, norm=norm
                 )
             else:
-                extract_text_feature_all(cfg, dataset.classnames, [], clip_model, dataset.template, norm=norm)
+                extract_text_feature_all(
+                    cfg, train_dataset.classnames, [], clip_model, train_dataset.template, norm=norm
+                )
