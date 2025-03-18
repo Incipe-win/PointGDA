@@ -44,7 +44,7 @@ def main():
 
     # Textual features
     print("\nGetting textual features as CLIP's classifier.")
-    clip_weights_cupl_all = torch.load(cfg["cache_dir"] + "/text_weights_cupl_t_all.pt")
+    clip_weights_cupl_all = torch.load(cfg["cache_dir"] + "/text_weights_cupl_t_all.pt", weights_only=False)
     cate_num, prompt_cupl_num, dim = clip_weights_cupl_all.shape
     print(f"cate_num is {cate_num}, prompt_cupl_num is {prompt_cupl_num}, dim is {dim}")
     clip_weights_cupl = clip_weights_cupl_all.mean(dim=1).t()
@@ -60,7 +60,10 @@ def main():
 
     # Pre-load test features
     print("\nLoading visual features and labels from test set.")
-    test_features, test_labels = loda_val_test_feature(cfg, "test")
+    if cfg["dataset"] == "objaverse":
+        test_features, test_labels = loda_val_test_feature(cfg, "val")
+    else:
+        test_features, test_labels = loda_val_test_feature(cfg, "test")
 
     # ------------------------------------------ Fusion ------------------------------------------
     image_weights_all = torch.stack([cache_keys.t()[torch.argmax(cache_values, dim=1) == i] for i in range(cate_num)])

@@ -19,6 +19,8 @@ from collections import OrderedDict
 from models.uni3d import *
 import open_clip
 from tokenizer import SimpleTokenizer
+from datasets.objaverse import ObjaverseLVIS
+from torch.utils.data import DataLoader
 
 
 def extract_few_shot_feature(cfg, model, train_loader_cache, norm=True):
@@ -118,6 +120,7 @@ def extract_text_feature_all(cfg, classnames, prompt_paths, clip_model, template
                 texts += prompt[classname]
 
             texts_token = tokenizer(texts).cuda()
+            # texts_token = tokenizer(texts)
             # texts_token = clip.tokenize(texts, truncate=True).cuda()
             # prompt ensemble for ImageNet
             class_embeddings = clip_model.encode_text(texts_token)
@@ -177,7 +180,7 @@ if __name__ == "__main__":
     scanobjectnn = "/workspace/code/deep_learning/PointGDA/prompt/scanobjectnn.json"
     args = get_arguments()
     for seed in [1, 2, 3]:
-        clip_model, _, _ = open_clip.create_model_and_transforms(model_name=args.clip_model)
+        clip_model, _, _ = open_clip.create_model_and_transforms(model_name=args.clip_model, pretrained=args.pretrained)
         clip_model = clip_model.cuda()
 
         model = create_uni3d(args).cuda()
@@ -215,16 +218,27 @@ if __name__ == "__main__":
 
                 cfg["shots"] = k
                 print(cfg)
-                dataset = build_dataset(set, data_path, k)
-                val_loader = build_data_loader(data_source=dataset.val, batch_size=32, is_train=False, shuffle=False)
-                test_loader = build_data_loader(data_source=dataset.test, batch_size=32, is_train=False, shuffle=False)
-
-                train_loader_cache = build_data_loader(
-                    data_source=dataset.train_x,
-                    batch_size=32,
-                    is_train=True,
-                    shuffle=True,
-                )
+                if set == "objaverse":
+                    train_dataset = ObjaverseLVIS(data_path, "train", cfg["shots"])
+                    val_dataset = ObjaverseLVIS(data_path, "val", cfg["shots"])
+                    train_loader_cache = DataLoader(
+                        train_dataset, num_workers=8, batch_size=16, pin_memory=True, shuffle=False
+                    )
+                    val_loader = DataLoader(val_dataset, num_workers=8, batch_size=16, pin_memory=True, shuffle=False)
+                else:
+                    dataset = build_dataset(set, data_path, k)
+                    val_loader = build_data_loader(
+                        data_source=dataset.val, batch_size=16, is_train=False, shuffle=False
+                    )
+                    test_loader = build_data_loader(
+                        data_source=dataset.test, batch_size=16, is_train=False, shuffle=False
+                    )
+                    train_loader_cache = build_data_loader(
+                        data_source=dataset.train_x,
+                        batch_size=16,
+                        is_train=True,
+                        shuffle=True,
+                    )
 
                 # Construct the cache model by few-shot training set
                 print("\nConstructing cache model by few-shot visual features and labels.")
@@ -234,7 +248,8 @@ if __name__ == "__main__":
             # Extract val/test features
             print("\nLoading visual features and labels from val and test set.")
             extract_val_test_feature(cfg, "val", model, val_loader, norm=norm)
-            extract_val_test_feature(cfg, "test", model, test_loader, norm=norm)
+            if not set == "objaverse":
+                extract_val_test_feature(cfg, "test", model, test_loader, norm=norm)
 
             # [dataset.cupl_path, dataset.waffle_path, dataset.DCLIP_path]
             if set == "modelnet40":
