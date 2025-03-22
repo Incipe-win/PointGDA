@@ -86,25 +86,26 @@ def main():
         is_print=True,
     )
     metric["TIMO"] = acc_free
+    print(f"\nTIMO: {metric['TIMO']:.4f}")  # 确保输出格式可被正则匹配
 
     # TIMO-S
-    clip_weights_IGT, matching_score = image_guide_text_search(
-        cfg, clip_weights_cupl_all, val_features, val_labels, image_weights
-    )
-    acc_free = PointGDA(
-        cfg,
-        val_features,
-        val_labels,
-        test_features,
-        test_labels,
-        clip_weights_IGT,
-        clip_weights_cupl_all,
-        matching_score,
-        grid_search=True,
-        n_quick_search=10,
-        is_print=True,
-    )
-    metric["TIMO_S"] = acc_free
+    # clip_weights_IGT, matching_score = image_guide_text_search(
+    #     cfg, clip_weights_cupl_all, val_features, val_labels, image_weights
+    # )
+    # acc_free = PointGDA(
+    #     cfg,
+    #     val_features,
+    #     val_labels,
+    #     test_features,
+    #     test_labels,
+    #     clip_weights_IGT,
+    #     clip_weights_cupl_all,
+    #     matching_score,
+    #     grid_search=True,
+    #     n_quick_search=10,
+    #     is_print=True,
+    # )
+    # metric["TIMO_S"] = acc_free
 
 
 if __name__ == "__main__":
