@@ -178,6 +178,7 @@ def get_arguments():
 if __name__ == "__main__":
     modelnet40 = "/workspace/code/deep_learning/PointGDA/prompt/modelnet40.json"
     scanobjectnn = "/workspace/code/deep_learning/PointGDA/prompt/scanobjectnn.json"
+    objaverse = "/workspace/code/deep_learning/PointGDA/prompt/objaverse.json"
     args = get_arguments()
     for seed in [1, 2, 3]:
         clip_model, _, _ = open_clip.create_model_and_transforms(model_name=args.clip_model, pretrained=args.pretrained)
@@ -260,5 +261,5 @@ if __name__ == "__main__":
                 )
             else:
                 extract_text_feature_all(
-                    cfg, train_dataset.classnames, [], clip_model, train_dataset.template, norm=norm
+                    cfg, train_dataset.classnames, [objaverse], clip_model, train_dataset.template, norm=norm
                 )
