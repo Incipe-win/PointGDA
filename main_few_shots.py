@@ -53,6 +53,7 @@ def main():
     # Construct the cache model by few-shot training set
     print("\nConstructing cache model by few-shot visual features and labels.")
     cache_keys, cache_values = load_few_shot_feature(cfg)
+    cache_keys = cache_keys + 0.01 * torch.randn_like(cache_keys)  # 添加高斯噪声
 
     # Pre-load val features
     print("\nLoading visual features and labels from val set.")
