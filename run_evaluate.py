@@ -4,6 +4,7 @@ from statistics import mean
 from itertools import product
 
 # 定义参数组合
+# configs = ["modelnet40", "scanobjectnn"]
 configs = ["modelnet40", "scanobjectnn", "objaverse"]
 seeds = [1, 2, 3]
 shots = [1, 2, 4, 8, 16]
@@ -12,10 +13,10 @@ shots = [1, 2, 4, 8, 16]
 results = {cfg: {shot: [] for shot in shots} for cfg in configs}
 
 # 正则表达式提取准确率（假设输出中有"TIMO: 0.95"格式）
-pattern = re.compile(r"TIMO: (\d+\.\d+)")
+pattern = re.compile(r"GDA_F: (\d+\.\d+)")
 
 for config, shot, seed in product(configs, shots, seeds):
-    cmd = f"python main_few_shots.py --config configs/{config}.yaml --seed {seed} --shot {shot}"
+    cmd = f"python main_few_shots.py --config configs/{config}.yaml --seed {seed} --shot {shot} --model create_uni3d --npoints 2048 --clip-model ViT-H-16 --pc-model eva02_base_patch14_448 --pc-feat-dim 768 --evaluate_3d --ckpt_path ckpt/uni3d-b.pt"
     print(f"Running: {cmd}")
 
     # 执行命令并捕获输出

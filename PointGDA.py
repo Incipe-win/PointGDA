@@ -6,6 +6,7 @@ from torch.distributions import MultivariateNormal
 from sklearn.decomposition import PCA
 from scipy.stats import normaltest
 from sklearn.cluster import KMeans
+from tqdm import tqdm
 
 
 class GMM:
@@ -21,7 +22,7 @@ class GMM:
 
         # 初始化参数（添加随机扰动）
         self.weights_ = torch.ones(self.n_components, device=device) / self.n_components
-        X_np = X.cpu().numpy()
+        X_np = X.detach().cpu().numpy()
         kmeans = KMeans(n_clusters=self.n_components, init="k-means++", random_state=42).fit(X_np)
         self.means_ = torch.tensor(kmeans.cluster_centers_, device=device).float()
         self.covariances_ = torch.stack(
@@ -72,7 +73,9 @@ class GMM:
         return self
 
 
-def Optimal_GDA(vecs, labels, clip_weights, val_features, val_labels, alpha_shift=False, n_components=2):
+def Optimal_GDA(
+    vecs, labels, clip_weights, val_features, val_labels, alpha_shift=False, n_components=2, use_learned_features=True
+):
     # 计算每个类的GMM混合均值
     mus = []
     for i in range(clip_weights.shape[1]):
@@ -200,6 +203,113 @@ def Native_GDA(vecs, labels, clip_weights, val_features, val_labels, alpha_shift
     return alpha, W, b, best_val_acc
 
 
+def helper(
+    cfg,
+    cache_keys,
+    cache_values,
+    val_features,
+    val_labels,
+    test_features,
+    test_labels,
+    clip_weights,
+    model,
+    train_loader_F,
+):
+    feat_dim, cate_num = clip_weights.shape
+    cache_values = cache_values.reshape(cate_num, -1, cate_num)
+    cache_keys = (
+        cache_keys.t().reshape(cate_num, cfg["shots"] * cfg["augment_epoch"], feat_dim).reshape(cate_num, -1, feat_dim)
+    )
+
+    cfg["w"] = cfg["w_training"]
+    cache_keys, cache_values = cache_keys.reshape(-1, feat_dim), cache_values.reshape(-1, cate_num)
+    adapter = GDA_Training(cfg, clip_weights, model, cache_keys).cuda()
+
+    optimizer = torch.optim.AdamW(adapter.parameters(), lr=cfg["lr"], eps=cfg["eps"], weight_decay=1e-1)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cfg["train_epoch"] * len(train_loader_F))
+    Loss = SmoothCrossEntropy(alpha=0.1)
+
+    beta, alpha = cfg["init_beta"], cfg["init_alpha"]
+    best_acc, best_epoch = 0.0, 0
+    # feat_num = cfg["feat_num"]
+
+    for train_idx in range(cfg["train_epoch"]):
+        # Train
+        adapter.train()
+        correct_samples, all_samples = 0, 0
+        loss_list = []
+        print("Train Epoch: {:} / {:}".format(train_idx, cfg["train_epoch"]))
+
+        for i, (pc, target, rgb) in enumerate(tqdm(train_loader_F)):
+            pc, target, rgb = pc.cuda(), target.cuda(), rgb.cuda()
+            feature = torch.cat((pc, rgb), dim=-1)
+            with torch.no_grad():
+                pc_features = get_model(model).encode_pc(feature)
+                pc_features /= pc_features.norm(dim=-1, keepdim=True)
+
+            new_cache_keys, new_clip_weights, R_FW = adapter(cache_keys, clip_weights, cache_values)
+            R_fF = pc_features @ new_cache_keys.t()
+            cache_logits = ((-1) * (beta - beta * R_fF)).exp() @ R_FW
+            R_fW = 100.0 * pc_features @ new_clip_weights
+            ape_logits = R_fW + cache_logits * alpha
+
+            loss = Loss(ape_logits, target)
+
+            # 特征一致性损失
+            keys_mse = F.mse_loss(new_cache_keys, cache_keys)
+            clip_mse = F.mse_loss(new_clip_weights, clip_weights)
+
+            # 参数正则化（可选）
+            res_l2 = torch.norm(adapter.res)
+            value_weights_l2 = torch.norm(adapter.value_weights)
+
+            # 总损失 = 主损失 + 特征一致性 + 正则化
+            loss = (
+                loss
+                + cfg["keys_mse_weight"] * keys_mse
+                + cfg["clip_mse_weight"] * clip_mse
+                + cfg["res_l2_weight"] * res_l2
+                + cfg["value_weights_l2_weight"] * value_weights_l2
+            )
+
+            acc = cls_acc(ape_logits, target)
+            correct_samples += acc / 100 * len(ape_logits)
+            all_samples += len(ape_logits)
+            loss_list.append(loss.item())
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+
+        current_lr = scheduler.get_last_lr()[0]
+        print(
+            "LR: {:.6f}, Acc: {:.4f} ({:}/{:}), Loss: {:.4f}".format(
+                current_lr, correct_samples / all_samples, correct_samples, all_samples, sum(loss_list) / len(loss_list)
+            )
+        )
+
+        # Eval
+        adapter.eval()
+        with torch.no_grad():
+            new_cache_keys, new_clip_weights, R_FW = adapter(cache_keys, clip_weights, cache_values)
+
+            R_fF = val_features @ new_cache_keys.t()
+            cache_logits = ((-1) * (beta - beta * R_fF)).exp() @ R_FW
+            R_fW = 100.0 * val_features @ new_clip_weights
+            ape_logits = R_fW + cache_logits * alpha
+        acc = cls_acc(ape_logits, val_labels)
+
+        print("**** APE-T's test accuracy: {:.2f}. ****\n".format(acc))
+        if acc > best_acc:
+            best_acc = acc
+            best_epoch = train_idx
+            torch.save(adapter, cfg["cache_dir"] + "/APE-T_" + str(cfg["shots"]) + "shots.pt")
+
+    adapter = torch.load(cfg["cache_dir"] + "/APE-T_" + str(cfg["shots"]) + "shots.pt", weights_only=False)
+    return adapter(cache_keys, clip_weights, cache_values)
+
+
 def PointGDA(
     cfg,
     val_features,
@@ -216,8 +326,8 @@ def PointGDA(
     pca_dim=256,
     q=700,
 ):
-    if cfg["dataset"] == "objaverse":
-        pca_dim = 1024
+    # if cfg["dataset"] == "objaverse":
+    #     pca_dim = 1024
     device = val_features.device
     best_val_acc = 0
     best_alpha = 0.1
@@ -229,6 +339,8 @@ def PointGDA(
             labels_v = torch.load(cfg["cache_dir"] + "/" + f"{cfg['shots']}_labels_f.pt", weights_only=False).float()
         else:
             vecs_v, labels_v = vecs_labels[0], vecs_labels[1]
+
+        print(vecs_v.shape, clip_weights.shape, labels_v.shape)
 
         vecs_t = clip_weights_all.clone().float()  # c, n, d
         vecs_t, weights = vec_sort(vecs_t, matching_score)
@@ -304,28 +416,28 @@ def PointGDA(
             # clip_weights = clip_weights.index_select(0, selected_indices)
             # # ========================================================
 
-            # 添加PCA降维逻辑
-            if pca_dim is not None:
-                # 合并训练数据（vecs_c）和CLIP模板数据（sliced_vecs_t）来拟合PCA
-                all_train_data = torch.cat([sliced_vecs_t, vecs_v]).cpu().numpy()
-                pca = PCA(n_components=pca_dim, random_state=42)
-                pca.fit(all_train_data)
+            # # 添加PCA降维逻辑
+            # if pca_dim is not None:
+            #     # 合并训练数据（vecs_c）和CLIP模板数据（sliced_vecs_t）来拟合PCA
+            #     all_train_data = torch.cat([sliced_vecs_t, vecs_v]).cpu().numpy()
+            #     pca = PCA(n_components=pca_dim, random_state=42)
+            #     pca.fit(all_train_data)
 
-                # 对训练数据降维
-                vecs_c = torch.tensor(pca.transform(vecs_c.cpu().numpy()), device=device)
+            #     # 对训练数据降维
+            #     vecs_c = torch.tensor(pca.transform(vecs_c.cpu().numpy()), device=device)
 
-                # 对验证数据降维
-                val_features = torch.tensor(pca.transform(val_features.cpu().numpy()), device=device)
+            #     # 对验证数据降维
+            #     val_features = torch.tensor(pca.transform(val_features.cpu().numpy()), device=device)
 
-                # 对测试数据降维
-                test_features = torch.tensor(pca.transform(test_features.cpu().numpy()), device=device)
+            #     # 对测试数据降维
+            #     test_features = torch.tensor(pca.transform(test_features.cpu().numpy()), device=device)
 
-                # 对CLIP权重降维（处理维度转置）
-                clip_weights_np = clip_weights.cpu().numpy().T  # 转置为 [C, D]
-                clip_weights_reduced = pca.transform(clip_weights_np)
-                clip_weights = torch.tensor(clip_weights_reduced.T, device=device)  # 转置回 [pca_dim, C]
+            #     # 对CLIP权重降维（处理维度转置）
+            #     clip_weights_np = clip_weights.cpu().numpy().T  # 转置为 [C, D]
+            #     clip_weights_reduced = pca.transform(clip_weights_np)
+            #     clip_weights = torch.tensor(clip_weights_reduced.T, device=device)  # 转置回 [pca_dim, C]
 
-            print(vecs_c.shape, val_features.shape, clip_weights.shape)
+            # print(vecs_c.shape, val_features.shape, clip_weights.shape)
             alpha, W, b, val_acc = Optimal_GDA(
                 vecs_c,
                 labels_c,
@@ -351,5 +463,134 @@ def PointGDA(
             print("best_beta:", best_beta)
             print("training-free acc:", acc)
             print()
+
+    return acc
+
+
+def PointGDA_F(
+    cfg,
+    val_features,
+    val_labels,
+    test_features,
+    test_labels,
+    clip_weights,
+    clip_weights_all,
+    matching_score,
+    model,
+    train_loader_F,
+    vecs_labels=None,
+    grid_search=False,
+    n_quick_search=-1,
+    is_print=False,
+    pca_dim=256,
+):
+    device = val_features.device
+    best_val_acc = 0
+    best_alpha = 0.1
+
+    if vecs_labels is None:
+        vecs_v = torch.load(cfg["cache_dir"] + "/" + f"{cfg['shots']}_vecs_f.pt", weights_only=False).float()
+        labels_v = torch.load(cfg["cache_dir"] + "/" + f"{cfg['shots']}_labels_f.pt", weights_only=False).float()
+    else:
+        vecs_v, labels_v = vecs_labels[0], vecs_labels[1]
+
+    vecs_v = vecs_v.T
+    labels_v = F.one_hot(labels_v.long(), num_classes=clip_weights.shape[1]).float()
+    vecs_v, clip_weights, labels_v = helper(
+        cfg,
+        vecs_v,
+        labels_v,
+        val_features,
+        val_labels,
+        test_features,
+        test_labels,
+        clip_weights,
+        model,
+        train_loader_F,
+    )
+    labels_v = labels_v.argmax(dim=1)
+    print(vecs_v.shape, clip_weights.shape, labels_v.shape)
+
+    vecs_t = clip_weights_all.clone().float()  # c, n, d
+    vecs_t, weights = vec_sort(vecs_t, matching_score)
+    (
+        cate_num,
+        prompt_num,
+        _,
+    ) = vecs_t.shape
+    vecs_c, labels_c = vecs_v, labels_v
+
+    if grid_search:
+        if n_quick_search != -1:
+            beta_list = [int(t) for t in torch.linspace(1, prompt_num * 2, n_quick_search)]
+        else:
+            beta_list = range(1, prompt_num * 2)
+    else:
+        beta_list = [prompt_num]
+
+    for beta in beta_list:
+        beta = beta + 1 if beta == 0 else beta
+
+        sliced_vecs_t = vecs_t.repeat(1, 2, 1)[:, :beta, :]  # c, s, d
+        sliced_weights = weights.repeat(1, 2)[:, :beta]  # c, s
+
+        # weight for instance based transfer
+        sliced_vecs_t = sliced_vecs_t * sliced_weights.unsqueeze(-1)
+
+        sliced_vecs_t = sliced_vecs_t.reshape(cate_num * beta, -1)
+        tmp = torch.tensor(range(cate_num)).unsqueeze(1).repeat(1, beta)
+        sliced_labels_t = tmp.flatten().to(sliced_vecs_t.device)
+
+        # Instance based transfer
+        vecs_c = torch.cat([sliced_vecs_t, vecs_v])
+        labels_c = torch.cat([sliced_labels_t, labels_v])
+
+        # 添加PCA降维逻辑
+        if pca_dim is not None:
+            # 合并训练数据（vecs_c）和CLIP模板数据（sliced_vecs_t）来拟合PCA
+            all_train_data = torch.cat([sliced_vecs_t, vecs_v]).detach().cpu().numpy()
+            pca = PCA(n_components=pca_dim, random_state=42)
+            pca.fit(all_train_data)
+
+            # 对训练数据降维
+            vecs_c = torch.tensor(pca.transform(vecs_c.detach().cpu().numpy()), device=device)
+
+            # 对验证数据降维
+            val_features = torch.tensor(pca.transform(val_features.detach().cpu().numpy()), device=device)
+
+            # 对测试数据降维
+            test_features = torch.tensor(pca.transform(test_features.detach().cpu().numpy()), device=device)
+
+            # 对CLIP权重降维（处理维度转置）
+            clip_weights_np = clip_weights.detach().cpu().numpy().T  # 转置为 [C, D]
+            clip_weights_reduced = pca.transform(clip_weights_np)
+            clip_weights = torch.tensor(clip_weights_reduced.T, device=device)  # 转置回 [pca_dim, C]
+
+        # print(vecs_c.shape, val_features.shape, clip_weights.shape)
+        alpha, W, b, val_acc = Optimal_GDA(
+            vecs_c,
+            labels_c,
+            clip_weights,
+            val_features,
+            val_labels,
+            alpha_shift=True,
+        )
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_beta = beta
+            best_alpha = alpha
+            best_weights = [W.clone(), b.clone()]
+
+    alpha = best_alpha
+    test_logits = alpha * test_features.float() @ clip_weights.float() + (
+        test_features.float() @ best_weights[0] + best_weights[1]
+    )
+    acc = cls_acc(test_logits, test_labels)
+
+    if is_print:
+        print("best_val_alpha: %s \t best_val_acc: %s" % (best_alpha, best_val_acc))
+        print("best_beta:", best_beta)
+        print("training-free acc:", acc)
+        print()
 
     return acc

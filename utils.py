@@ -1,5 +1,7 @@
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
+import os
 
 
 def cls_acc(output, target, topk=1):
@@ -128,3 +130,144 @@ def image_guide_text_search(cfg, clip_weights_cupl_all, val_features, val_labels
     )
     clip_weights_cupl_IGT = clip_weights_cupl_IGT.t()
     return clip_weights_cupl_IGT, matching_score
+
+
+# def cal_criterion(cfg, clip_weights, cache_keys, only_use_txt=False, training_free=False):
+
+#     feat_dim, cate_num = clip_weights.shape
+#     text_feat = clip_weights.t().unsqueeze(1)
+#     cache_feat = cache_keys.reshape(cate_num, cfg["shots"] * cfg["augment_epoch"], feat_dim)
+
+#     save_path = f"caches/create_uni3d/{cfg['seed']}/{cfg['dataset']}"
+#     save_file = "{}/criterion_{}_{}shot.pt".format(save_path, cfg["backbone"].replace("/", ""), cfg["shots"])
+
+#     if os.path.exists(save_file):
+#         print("Loading criterion...")
+#         sim = torch.load(save_file, weights_only=False)
+#     elif only_use_txt:
+#         print("Calculating criterion...")
+
+#         feats = text_feat.squeeze()
+
+#         sim_sum = torch.zeros((feat_dim)).cuda()
+#         count = 0
+#         for i in range(cate_num):
+#             for j in range(cate_num):
+#                 if i != j:
+#                     sim_sum += feats[i, :] * feats[j, :]
+#                     count += 1
+#         sim = sim_sum / count
+#         torch.save(sim, save_file)
+#     else:
+#         print("Calculating criterion...")
+
+#         feats = torch.cat([text_feat, cache_feat], dim=1)
+#         samp_num = feats.shape[1]
+
+#         sim_sum = torch.zeros((feat_dim)).cuda()
+#         count = 0
+#         for i in range(cate_num):
+#             for j in range(cate_num):
+#                 for m in range(samp_num):
+#                     for n in range(samp_num):
+#                         if i != j:
+#                             sim_sum += feats[i, m, :] * feats[j, n, :]
+#                             count += 1
+#         sim = sim_sum / count
+#         torch.save(sim, save_file)
+
+#     criterion = (-1) * cfg["w"][0] * sim + cfg["w"][1] * torch.var(clip_weights, dim=1)
+
+#     if training_free:
+#         _, indices = torch.topk(criterion, k=cfg["training_free_feat_num"])
+#     else:
+#         _, indices = torch.topk(criterion, k=cfg["training_feat_num"])
+#     return indices
+
+
+def cal_criterion(cfg, clip_weights, cache_keys, only_use_txt=False, training_free=False):
+    feat_dim, cate_num = clip_weights.shape
+    text_feat = clip_weights.t().unsqueeze(1)
+    cache_feat = cache_keys.reshape(cate_num, cfg["shots"] * cfg["augment_epoch"], feat_dim)
+
+    save_path = f"caches/create_uni3d/{cfg['seed']}/{cfg['dataset']}"
+    save_file = f"{save_path}/criterion_{cfg['backbone'].replace('/', '')}_{cfg['shots']}shot.pt"
+
+    if os.path.exists(save_file):
+        print("Loading criterion...")
+        sim = torch.load(save_file, weights_only=False)
+    elif only_use_txt:
+        print("Calculating criterion (text only)...")
+        feats = text_feat.squeeze()  # Shape: (cate_num, feat_dim)
+
+        # Vectorized computation replacing double loops
+        sum_feat = feats.sum(dim=0)
+        sum_sq_feat = (feats**2).sum(dim=0)
+        sim_sum = sum_feat**2 - sum_sq_feat
+        count = cate_num * (cate_num - 1)
+        sim = sim_sum / count
+
+        torch.save(sim, save_file)
+    else:
+        print("Calculating criterion with cache...")
+        feats = torch.cat([text_feat, cache_feat], dim=1)  # Shape: (cate_num, samp_num, feat_dim)
+        samp_num = feats.shape[1]
+
+        # Vectorized computation replacing quadruple loops
+        sum_feats = feats.sum(dim=1)  # Sum over samples, shape: (cate_num, feat_dim)
+        total_sum = (sum_feats.sum(dim=0)) ** 2
+        diag_sum = (sum_feats**2).sum(dim=0)
+        sim_sum = total_sum - diag_sum
+        count = cate_num * (cate_num - 1) * (samp_num**2)
+        sim = sim_sum / count
+
+        torch.save(sim, save_file)
+
+    # Original post-processing remains unchanged
+    criterion = (-1) * cfg["w"][0] * sim + cfg["w"][1] * torch.var(clip_weights, dim=1)
+    k = cfg["training_free_feat_num"] if training_free else cfg["training_feat_num"]
+    _, indices = torch.topk(criterion, k=k)
+    return indices
+
+
+class GDA_Training(nn.Module):
+    def __init__(self, cfg, clip_weights, model, cache_keys):
+        super(GDA_Training, self).__init__()
+        self.shots = cfg["shots"] * cfg["augment_epoch"]
+        self.feat_dim, self.cate_num = clip_weights.shape
+
+        self.value_weights = nn.Parameter(
+            torch.ones([self.cate_num * cfg["shots"] * cfg["augment_epoch"], 1]).half().cuda(), requires_grad=True
+        )
+        self.indices = cal_criterion(cfg, clip_weights, cache_keys)
+
+        self.res = nn.Parameter(
+            torch.zeros([self.cate_num, cfg["training_feat_num"]]).half().cuda(), requires_grad=True
+        )
+        self.feat_num = cfg["training_feat_num"]
+
+    def forward(self, cache_keys, clip_weights, cache_values):
+        res_keys = self.res.unsqueeze(1).repeat(1, self.shots, 1).reshape(-1, self.feat_num)
+        new_cache_keys = cache_keys.clone()
+        new_cache_keys = new_cache_keys.reshape(-1, self.feat_dim)
+        new_cache_keys[:, self.indices] = new_cache_keys[:, self.indices] + res_keys
+
+        res_text = self.res.t()
+        new_clip_weights = clip_weights.clone()
+        new_clip_weights[self.indices, :] = clip_weights[self.indices, :] + res_text
+        new_cache_values = cache_values * self.value_weights
+
+        return new_cache_keys, new_clip_weights, new_cache_values
+
+
+class SmoothCrossEntropy(nn.Module):
+    def __init__(self, alpha=0.0):
+        super(SmoothCrossEntropy, self).__init__()
+        self.alpha = alpha
+
+    def forward(self, logits, labels):
+        num_classes = logits.shape[-1]
+        alpha_div_k = self.alpha / num_classes
+        target_probs = F.one_hot(labels, num_classes=num_classes).float() * (1.0 - self.alpha) + alpha_div_k
+        loss = -(target_probs * torch.log_softmax(logits, dim=-1)).sum(dim=-1)
+        return loss.mean()
