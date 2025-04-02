@@ -326,8 +326,8 @@ def PointGDA(
     pca_dim=256,
     q=700,
 ):
-    # if cfg["dataset"] == "objaverse":
-    #     pca_dim = 1024
+    if cfg["dataset"] == "objaverse":
+        pca_dim = 1024
     device = val_features.device
     best_val_acc = 0
     best_alpha = 0.1
@@ -376,66 +376,26 @@ def PointGDA(
             vecs_c = torch.cat([sliced_vecs_t, vecs_v])
             labels_c = torch.cat([sliced_labels_t, labels_v])
 
-            # # ==================== 新增特征处理逻辑 ====================
-            # # 将训练数据转换为numpy处理
-            # train_data_np = vecs_c.cpu().numpy()
+            # 添加PCA降维逻辑
+            if pca_dim is not None:
+                # 合并训练数据（vecs_c）和CLIP模板数据（sliced_vecs_t）来拟合PCA
+                all_train_data = torch.cat([sliced_vecs_t, vecs_v]).cpu().numpy()
+                pca = PCA(n_components=pca_dim, random_state=42)
+                pca.fit(all_train_data)
 
-            # # 1. 标准化每个特征维度
-            # means = np.mean(train_data_np, axis=0)
-            # stds = np.std(train_data_np, axis=0)
-            # stds[stds == 0] = 1.0  # 防止除零
+                # 对训练数据降维
+                vecs_c = torch.tensor(pca.transform(vecs_c.cpu().numpy()), device=device)
 
-            # # 2. 正态性检验并选择特征
-            # p_values = []
-            # for i in range(train_data_np.shape[1]):
-            #     if len(train_data_np) >= 20:  # 确保足够样本
-            #         _, p = normaltest((train_data_np[:, i] - means[i]) / stds[i])
-            #         p_values.append(p)
-            #     else:
-            #         p_values.append(0.0)  # 样本不足时默认p值
+                # 对验证数据降维
+                val_features = torch.tensor(pca.transform(val_features.cpu().numpy()), device=device)
 
-            # # 3. 按p值选择top Q维度
-            # sorted_indices = np.argsort(p_values)[::-1].copy()  # 降序排列
-            # selected_indices = sorted_indices[:q]
+                # 对测试数据降维
+                test_features = torch.tensor(pca.transform(test_features.cpu().numpy()), device=device)
 
-            # # 转换为torch张量并移至对应设备
-            # means_tensor = torch.tensor(means, dtype=vecs_c.dtype, device=device)
-            # stds_tensor = torch.tensor(stds, dtype=vecs_c.dtype, device=device)
-            # selected_indices = torch.tensor(selected_indices, dtype=torch.long, device=device)
-
-            # # 对特征进行标准化和维度选择
-            # def process_features(features):
-            #     normalized = (features - means_tensor) / stds_tensor
-            #     return normalized.index_select(1, selected_indices)
-
-            # vecs_c = process_features(vecs_c)
-            # val_features = process_features(val_features)
-            # test_features = process_features(test_features)
-
-            # # 调整clip_weights维度
-            # clip_weights = clip_weights.index_select(0, selected_indices)
-            # # ========================================================
-
-            # # 添加PCA降维逻辑
-            # if pca_dim is not None:
-            #     # 合并训练数据（vecs_c）和CLIP模板数据（sliced_vecs_t）来拟合PCA
-            #     all_train_data = torch.cat([sliced_vecs_t, vecs_v]).cpu().numpy()
-            #     pca = PCA(n_components=pca_dim, random_state=42)
-            #     pca.fit(all_train_data)
-
-            #     # 对训练数据降维
-            #     vecs_c = torch.tensor(pca.transform(vecs_c.cpu().numpy()), device=device)
-
-            #     # 对验证数据降维
-            #     val_features = torch.tensor(pca.transform(val_features.cpu().numpy()), device=device)
-
-            #     # 对测试数据降维
-            #     test_features = torch.tensor(pca.transform(test_features.cpu().numpy()), device=device)
-
-            #     # 对CLIP权重降维（处理维度转置）
-            #     clip_weights_np = clip_weights.cpu().numpy().T  # 转置为 [C, D]
-            #     clip_weights_reduced = pca.transform(clip_weights_np)
-            #     clip_weights = torch.tensor(clip_weights_reduced.T, device=device)  # 转置回 [pca_dim, C]
+                # 对CLIP权重降维（处理维度转置）
+                clip_weights_np = clip_weights.cpu().numpy().T  # 转置为 [C, D]
+                clip_weights_reduced = pca.transform(clip_weights_np)
+                clip_weights = torch.tensor(clip_weights_reduced.T, device=device)  # 转置回 [pca_dim, C]
 
             # print(vecs_c.shape, val_features.shape, clip_weights.shape)
             alpha, W, b, val_acc = Optimal_GDA(
@@ -549,6 +509,7 @@ def PointGDA_F(
         if pca_dim is not None:
             # 合并训练数据（vecs_c）和CLIP模板数据（sliced_vecs_t）来拟合PCA
             all_train_data = torch.cat([sliced_vecs_t, vecs_v]).detach().cpu().numpy()
+            print(sliced_vecs_t.shape, vecs_v.shape)
             pca = PCA(n_components=pca_dim, random_state=42)
             pca.fit(all_train_data)
 

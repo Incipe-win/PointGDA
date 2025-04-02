@@ -55,36 +55,28 @@ def image_guide_text(cfg, t_features, s_features, gamma=-1, return_weights=False
     t_features = t_features / t_features.norm(dim=-1, keepdim=True)
 
     if gamma == -1:
-        if cfg["dataset"] == "imagenet":
+        if cfg["dataset"] == "modelnet40":
             gamma = 1
-        elif cfg["dataset"] == "oxford_flowers":
+        elif cfg["dataset"] == "objaverse":
             gamma = 100
         else:
             gamma = 50
 
-    cate_num, prompt_num, feat_dim = t_features.shape  # c, p, d
     if len(s_features.shape) == 3:
         s_features = s_features.mean(dim=1)  # c,d
-        s_features = s_features / s_features.norm(dim=-1, keepdim=True)
-    weights = torch.ones(cate_num, prompt_num).to(t_features.dtype).to(t_features.device)  # c, p
+    s_features = s_features / s_features.norm(dim=-1, keepdim=True)
     s_features = s_features.to(t_features.dtype)
-    t_features = t_features / t_features.norm(dim=-1, keepdim=True)
 
-    matching_score = []
-    for c in range(cate_num):
-        # weights[c:c+1] # 1, p
-        # t_features[c] # p, d
-        # s_features[c:c+1] # 1, d
-        weights[c] = (s_features[c : c + 1] @ t_features[c].t()).squeeze(dim=0)
-        matching_score.append(weights[c].clone())
-        weights[c] = weights[c] / weights[c].norm()
-        weights[c] = F.softmax(weights[c] * gamma, dim=0)
-    matching_score = torch.stack(matching_score, dim=0)  # N, P
+    s_features_unsqueezed = s_features.unsqueeze(1)
 
-    for weights in [weights]:
-        normed_weights = weights
-        normed_clip_weights = torch.einsum("cp, cpd-> cd", normed_weights, t_features)
-        normed_clip_weights = normed_clip_weights / normed_clip_weights.norm(dim=-1, keepdim=True)
+    raw_weights = torch.bmm(s_features_unsqueezed, t_features.transpose(1, 2))
+    raw_weights = raw_weights.squeeze(1)
+
+    matching_score = raw_weights.clone()
+
+    normed_weights = F.softmax(raw_weights * gamma, dim=-1)
+    normed_clip_weights = torch.einsum("cp, cpd -> cd", normed_weights, t_features)
+    normed_clip_weights = normed_clip_weights / normed_clip_weights.norm(dim=-1, keepdim=True)
 
     if return_matching:
         return normed_clip_weights, matching_score
